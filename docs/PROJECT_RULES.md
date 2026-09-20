@@ -35,7 +35,23 @@
   * 변수명 예시: `revenue_growth_rate_percentage`, `operating_profit_margin_percentage`, `debt_to_equity_ratio_percentage`, `free_cash_flow_amount_krw`
   * 함수명 예시: `calculate_revenue_growth_rate()`, `evaluate_debt_to_equity_ratio()`, `fetch_annual_financial_statements_from_dart()`
 
-### [규칙 7] 커밋 메시지 컨벤션 (Conventional Commits)
+### [규칙 7] Python 가상환경 사용 의무 (Mandatory Virtual Environment)
+* 모든 Python 개발, 실행, 테스트 및 패키지 설치는 반드시 프로젝트 전용 가상환경에서 수행한다.
+* 시스템 전역 Python 환경에 패키지를 직접 설치하거나 전역 패키지에 의존하지 않는다.
+* 가상환경은 프로젝트 루트의 `.venv` 디렉터리에 생성하고 사용한다.
+* 가상환경 생성 및 활성화 예시:
+  ```bash
+  python -m venv .venv
+  # Windows PowerShell
+  .venv\\Scripts\\Activate.ps1
+  # Windows Command Prompt
+  .venv\\Scripts\\activate.bat
+  # macOS/Linux
+  source .venv/bin/activate
+  ```
+* 의존성은 가상환경이 활성화된 상태에서 `requirements.txt`를 기준으로 설치하고 관리한다.
+
+### [규칙 8] 커밋 메시지 컨벤션 (Conventional Commits)
 * 커밋 메시지는 **Conventional Commits 규약**을 따른다.
 * 형식: `<type>(<scope>): <간결한 요약>
 
