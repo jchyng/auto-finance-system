@@ -1,1 +1,26 @@
-.aider*
+# Python 가상환경 격리
+.venv/
+env/
+venv/
+
+# Python 캐시 및 바이트코드
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# 테스트 캐시
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 민감한 환경변수 (DART API Key 등)
+.env
+
+# 런타임 수집 데이터 및 로컬 캐시 (git 제외, fixture 샘플은 포함)
+data/raw/
+data/processed/
+data/metrics/
+data/evaluation/
+data/cache/
+reports/
