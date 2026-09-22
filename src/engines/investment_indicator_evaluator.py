@@ -296,7 +296,8 @@ def evaluate_current_ratio(
 def evaluate_interest_coverage_ratio(
     current_value: Optional[float],
     is_debt_free: bool,
-    five_year_average: Optional[float]
+    five_year_average: Optional[float],
+    is_financial_industry: bool = False
 ) -> Tuple[IndicatorEvaluationStatus, str]:
     """
     이자보상배율 상태를 판정합니다.
@@ -310,6 +311,13 @@ def evaluate_interest_coverage_ratio(
     Returns:
         (판정 상태, 판정 근거 문장) 튜플
     """
+    # 금융업 예외: 이자비용이 본업의 원가이므로 잠재부실 판정에 사용 불가
+    if is_financial_industry:
+        return (
+            IndicatorEvaluationStatus.NOT_APPLICABLE,
+            "금융업 특성상 이자보상배율 판정이 적합하지 않거나 데이터가 부족합니다."
+        )
+
     if is_debt_free:
         return (
             IndicatorEvaluationStatus.GOOD,
@@ -732,14 +740,18 @@ def evaluate_all_indicators(
         data_source=data_source_base
     ))
     
-    # 2-4. ROIC
-    status, reason = evaluate_profitability_ratio(
-        "ROIC",
-        latest.return_on_invested_capital_percentage,
-        averages.average_return_on_invested_capital_percentage,
-        None,  # 업종 평균 미제공
-        "%"
-    )
+    # 2-4. ROIC (금융업은 순차입금 개념이 상이하여 판단불가)
+    if indicators_summary.is_financial_industry:
+        status = IndicatorEvaluationStatus.NOT_APPLICABLE
+        reason = "금융업 특성상 ROIC 판정이 적합하지 않거나 데이터가 부족합니다."
+    else:
+        status, reason = evaluate_profitability_ratio(
+            "ROIC",
+            latest.return_on_invested_capital_percentage,
+            averages.average_return_on_invested_capital_percentage,
+            None,  # 업종 평균 미제공
+            "%"
+        )
     evaluations.append(create_single_indicator_evaluation(
         category=IndicatorCategory.PROFITABILITY,
         name_korean="ROIC",
@@ -795,13 +807,14 @@ def evaluate_all_indicators(
     status, reason = evaluate_interest_coverage_ratio(
         latest.interest_coverage_ratio,
         latest.is_debt_free_company,
-        averages.average_interest_coverage_ratio
+        averages.average_interest_coverage_ratio,
+        indicators_summary.is_financial_industry
     )
     evaluations.append(create_single_indicator_evaluation(
         category=IndicatorCategory.FINANCIAL_HEALTH,
         name_korean="이자보상배율",
         name_english="Interest Coverage Ratio",
-        current_value="무차입" if latest.is_debt_free_company else format_optional_value(latest.interest_coverage_ratio, "배"),
+        current_value="무차입" if (latest.is_debt_free_company and not indicators_summary.is_financial_industry) else format_optional_value(latest.interest_coverage_ratio, "배"),
         five_year_average=format_optional_value(averages.average_interest_coverage_ratio, "배"),
         industry_benchmark="업종 데이터 없음",
         status=status,
@@ -921,13 +934,16 @@ def generate_complete_evaluation_report(
         indicators_summary.latest_fiscal_year
     )
     
-    # 간단한 사실 요약 (AI 없이 템플릿 기반)
+    # 간단한 사실 요약 (AI 없이 템플릿 기반, 4단계 상태 개수 전체 표기)
     good_count = sum(1 for e in evaluations if e.evaluation_status == IndicatorEvaluationStatus.GOOD)
+    normal_count = sum(1 for e in evaluations if e.evaluation_status == IndicatorEvaluationStatus.NORMAL)
     caution_count = sum(1 for e in evaluations if e.evaluation_status == IndicatorEvaluationStatus.CAUTION)
+    not_applicable_count = sum(1 for e in evaluations if e.evaluation_status == IndicatorEvaluationStatus.NOT_APPLICABLE)
     
     summary_text = (
         f"{indicators_summary.company_name}({indicators_summary.stock_code})의 {indicators_summary.latest_fiscal_year}년 "
-        f"재무 분석 결과, 15개 지표 중 {good_count}개가 양호, {caution_count}개가 주의 상태입니다. "
+        f"재무 분석 결과, 총 {len(evaluations)}개 지표 중 양호 {good_count}개, 보통 {normal_count}개, "
+        f"주의 {caution_count}개, 판단불가 {not_applicable_count}개입니다. "
         f"상세한 지표별 판정 근거는 아래 평가 내역을 참조하시기 바랍니다."
     )
     

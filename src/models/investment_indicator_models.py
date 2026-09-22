@@ -95,6 +95,7 @@ class CompanyInvestmentIndicatorsSummary:
     latest_fiscal_year: int
     latest_indicators: AnnualCalculatedIndicators
     historical_five_year_averages: HistoricalFiveYearAverageIndicators
+    is_financial_industry: bool = False                              # 금융업(은행/증권/보험) 여부 (금융업 전용 예외 판정에 사용)
 
     def to_dictionary(self) -> Dict[str, Any]:
         return asdict(self)
@@ -109,4 +110,5 @@ class CompanyInvestmentIndicatorsSummary:
             latest_fiscal_year=data_dictionary["latest_fiscal_year"],
             latest_indicators=AnnualCalculatedIndicators.from_dictionary(latest_dict),
             historical_five_year_averages=HistoricalFiveYearAverageIndicators.from_dictionary(historical_dict),
+            is_financial_industry=data_dictionary.get("is_financial_industry", False),
         )

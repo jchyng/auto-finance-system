@@ -8,7 +8,7 @@ Step 8. 실제 기업 3종 종합 검증 테스트 (Real Company Cross-Verificat
 [검증 항목]
 1. 지표 재현성: 원본 fixture 값 -> 독립 재계산값 == 파이프라인 산출값 (15개 지표 + 5개년 평균)
 2. 기준값 고정: 3개 기업 15개 지표의 확정 기준값(회귀 방지 baseline) 일치
-3. 금융업 예외: 신한지주는 부채비율/유동비율/EV-EBITDA가 `판단불가`,
+3. 금융업 예외: 신한지주는 부채비율/유동비율/이자보상배율/ROIC/EV-EBITDA가 `판단불가`,
    일반 제조업(삼성전자/현대자동차)은 동일 지표가 정상 산출
 4. 규칙 1 (투자 권유 금지): 리포트 본문에 금지 표현 0건
 5. 리포트 무결성: 15개 지표 명칭·계산공식·데이터 출처 표기
@@ -55,8 +55,14 @@ ALL_FIFTEEN_INDICATOR_KOREAN_NAMES = [
     "EV/EBITDA",
 ]
 
-# 금융업(은행/금융지주)에 적용이 부적합하여 `판단불가(업종 특성)` 처리되는 3개 지표
-FINANCIAL_INDUSTRY_EXCEPTION_INDICATOR_KOREAN_NAMES = ["부채비율", "유동비율", "EV/EBITDA"]
+# 금융업(은행/금융지주)에 적용이 부적합하여 `판단불가(업종 특성)` 처리되는 5개 지표
+FINANCIAL_INDUSTRY_EXCEPTION_INDICATOR_KOREAN_NAMES = [
+    "부채비율",
+    "유동비율",
+    "이자보상배율",
+    "ROIC",
+    "EV/EBITDA",
+]
 
 # Step 8 검증 대상 3개 기업 정의
 # (기준값은 원본 fixture로부터 독립 재계산하여 수동 검증을 완료한 값)
@@ -139,10 +145,10 @@ REAL_COMPANY_VERIFICATION_TARGETS = [
             "operating_profit_margin_percentage": 10.8,
             "return_on_equity_percentage": 8.4,
             "return_on_assets_percentage": 0.6,
-            "return_on_invested_capital_percentage": 34.3,
+            "return_on_invested_capital_percentage": None,
             "debt_to_equity_ratio_percentage": None,
             "current_ratio_percentage": None,
-            "interest_coverage_ratio": 0.3,
+            "interest_coverage_ratio": None,
             "free_cash_flow_amount_krw": 18500000000000,
             "price_to_earnings_ratio": 5.6,
             "price_to_book_ratio": 0.5,
@@ -239,8 +245,10 @@ def recompute_annual_indicators_from_fixture(
     )
     recomputed_indicators["return_on_equity_percentage"] = None
     recomputed_indicators["return_on_assets_percentage"] = None
-    recomputed_indicators["return_on_invested_capital_percentage"] = round_to_one_decimal(
-        net_operating_profit_after_tax_krw / invested_capital_krw * 100
+    recomputed_indicators["return_on_invested_capital_percentage"] = (
+        None
+        if is_financial_industry
+        else round_to_one_decimal(net_operating_profit_after_tax_krw / invested_capital_krw * 100)
     )
 
     # 재무건전성 (금융업 예외 처리 포함)
@@ -268,7 +276,7 @@ def recompute_annual_indicators_from_fixture(
     )
     recomputed_indicators["interest_coverage_ratio"] = (
         None
-        if current_statement["interest_expense_krw"] == 0
+        if is_financial_industry or current_statement["interest_expense_krw"] == 0
         else round_to_one_decimal(
             current_statement["operating_income_krw"] / current_statement["interest_expense_krw"]
         )

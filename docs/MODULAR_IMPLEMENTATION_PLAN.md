@@ -11,7 +11,7 @@
 ```mermaid
 flowchart TD
     subgraph M1["모듈 1: 명확한 데이터 모델 (src/models)"]
-        MODELS["데이터 모델 (Python 3.13 dataclasses)<br>- RawAnnualFinancialReport<br>- NormalizedFinancialStatement<br>- CalculatedAnnualMetrics<br>- CompleteEvaluationReport"]
+        MODELS["데이터 모델 (Python 3.13 dataclasses)<br>- RawAnnualFinancialReport<br>- NormalizedFinancialStatement<br>- AnnualCalculatedIndicators<br>- CompleteCompanyEvaluationReport"]
     end
 
     subgraph M2["모듈 2: 독립 데이터 수집기 (src/collectors)"]
@@ -156,11 +156,11 @@ flowchart TD
 
 | 단계 | 작업명 | 세부 작업 내용 | 독립 검증 방법 |
 | :---: | :--- | :--- | :--- |
-| **Step 1** | **프로젝트 뼈대 & 데이터 모델** | • 디렉토리 구조 및 가상환경 설정<br>• Pydantic 모델 정의 (`src/models/`) | 모델 직렬화/역직렬화 단위 테스트 통과 |
-| **Step 2** | **독립 수집기 개발** | • 재무제표 수집기 (`financial_collector.py`)<br>• 주가/시총 수집기 (`price_collector.py`)<br>• 업종 데이터 수집기 (`industry_collector.py`) | 삼성전자(005930) 대상 CLI 단독 실행 및 JSON 저장 확인 |
+| **Step 1** | **프로젝트 뼈대 & 데이터 모델** | • 디렉토리 구조 및 가상환경 설정<br>• dataclasses 모델 정의 (`src/models/`) | 모델 직렬화/역직렬화 단위 테스트 통과 |
+| **Step 2** | **독립 수집기 개발** | • 재무제표 수집기 (`dart_financial_statement_collector.py`)<br>• 주가/시총 수집기 (`krx_stock_price_collector.py`)<br>• 업종 데이터 수집기 (`krx_industry_benchmark_collector.py`) | 삼성전자(005930) 대상 CLI 단독 실행 및 JSON 저장 확인 |
 | **Step 3** | **정제기(Normalizer) 개발** | • 계정과목 표준화 매핑<br>• 단위 환산 및 결산기 정합성 검증 | 원본 JSON 투입 시 표준 JSON 출력 확인 |
 | **Step 4** | **15개 지표 계산 엔진 개발** | • 순수 계산 로직 (`calculator.py`)<br>• 15개 지표 및 5년 평균 산출<br>• ZeroDivision 및 적자 왜곡 방어 | 가상 재무제표 테스트셋으로 수작업 계산값과 100% 일치 확인 |
 | **Step 5** | **상태 판정 엔진 개발** | • 건전성 절대 기준 룰 엔진<br>• 성장/수익/가치 상대 비교 룰 엔진<br>• 금융업 등 산업 예외 필터 | 신한지주(금융) 및 일반 제조업 판정 결과 비교 검증 |
 | **Step 6** | **설명 및 포맷팅 엔진 개발** | • 오프라인 템플릿 해설 모듈<br>• 금융 용어 사전 매핑<br>• LLM 기반 자연어 해설 가드레일 | 출력 리포트에 권유 표현(매수 등) 부재 검증 |
-| **Step 7** | **전체 파이프라인 통합 (CLI)** | • 모듈 2~6 순차 연계 파이프라인 구축<br>• 통합 CLI 명령어 제공 (`src/cli.py`) | `python -m src.cli --ticker 005930` 원클릭 실행 리포트 출력 확인 |
+| **Step 7** | **전체 파이프라인 통합 (CLI)** | • 모듈 2~6 순차 연계 파이프라인 구축<br>• 통합 CLI 명령어 제공 (`src/investment_analysis_cli.py`) | `python -m src.investment_analysis_cli --ticker 005930` 원클릭 실행 리포트 출력 확인 |
 | **Step 8** | **실제 기업 3종 종합 검증** | • 삼성전자 (일반 제조/다운사이클)<br>• 현대차 (안정적 수익 제조)<br>• 신한지주 (금융업 예외 처리 확인) | 3개 기업의 리포트가 원칙과 실제 공시 데이터에 완벽 부합하는지 교차 검증 |

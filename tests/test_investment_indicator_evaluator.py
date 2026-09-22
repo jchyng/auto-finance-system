@@ -509,6 +509,7 @@ def test_cli_execution_with_samsung_data():
     """CLI 단독 실행 테스트 (삼성전자 데이터)"""
     import subprocess
     import sys
+    import os
     
     metrics_path = Path("data/metrics/005930_indicators.json")
     industry_path = Path("data/raw/005930_industry.json")
@@ -521,7 +522,8 @@ def test_cli_execution_with_samsung_data():
     if output_path.exists():
         output_path.unlink()
     
-    # CLI 실행
+    # CLI 실행 (Windows 한글 출력을 안전하게 처리하기 위해
+    # PYTHONIOENCODING=utf-8 환경변수와 errors='replace'를 사용)
     result = subprocess.run(
         [
             sys.executable,
@@ -536,7 +538,9 @@ def test_cli_execution_with_samsung_data():
         ],
         capture_output=True,
         text=True,
-        encoding="utf-8"
+        encoding="utf-8",
+        errors="replace",
+        env={"PYTHONIOENCODING": "utf-8", **dict(os.environ)}
     )
     
     # 실행 성공 확인 (exit code로 판단)

@@ -2,6 +2,7 @@
 투자지표 계산 엔진 (Financial Indicator Calculator)
 
 15개 핵심 투자지표를 순수 수학 공식으로 계산합니다.
+- 금융업(은행/증권/보험) 예외: 부채비율, 유동비율, 이자보상배율, ROIC, EV/EBITDA -> 판단불가(업종 특성)
 - 외부 API 의존성 없음 (100% 순수 함수)
 - 적자, 0나누기, 금융업 예외 처리 포함
 - 규칙 2 (AI 분리) 준수: 지표 계산은 100% Python 코드로 수행
@@ -253,7 +254,8 @@ def calculate_return_on_invested_capital(
     profit_before_tax: int,
     total_borrowings: int,
     equity: int,
-    cash: int
+    cash: int,
+    is_financial_industry: bool
 ) -> Optional[float]:
     """
     ROIC(투하자본이익률)를 계산합니다 (%).
@@ -273,8 +275,12 @@ def calculate_return_on_invested_capital(
         cash: 현금및현금성자산 (원)
     
     Returns:
-        ROIC (%) 또는 None
+        ROIC (%) 또는 None (금융업 또는 투하자본이 0일 경우)
     """
+    # 금융업 예외: 업종 특성상 ROIC 판정 부적합
+    if is_financial_industry:
+        return None
+
     # 실효세율 계산
     if profit_before_tax != 0 and income_tax_expense >= 0:
         effective_tax_rate = income_tax_expense / profit_before_tax
@@ -360,7 +366,8 @@ def calculate_current_ratio(
 
 def calculate_interest_coverage_ratio(
     operating_income: int,
-    interest_expense: int
+    interest_expense: int,
+    is_financial_industry: bool
 ) -> Tuple[Optional[float], bool]:
     """
     이자보상배율을 계산합니다 (배).
@@ -372,8 +379,12 @@ def calculate_interest_coverage_ratio(
         interest_expense: 이자비용 (원)
     
     Returns:
-        (이자보상배율 (배), 무차입여부) 튜플
+        (이자보상배율 (배), 무차입여부) 튜플 (금융업은 (None, False))
     """
+    # 금융업 예외: 업종 특성상 이자보상배율 판정 부적합
+    if is_financial_industry:
+        return (None, False)
+
     # 무차입 기업 (이자비용 = 0)
     if interest_expense == 0:
         return (None, True)
@@ -566,7 +577,8 @@ def calculate_annual_indicators(
         current_statement.profit_before_tax_krw,
         total_borrowings,
         current_statement.controlling_interest_equity_krw,
-        current_statement.cash_and_cash_equivalents_krw
+        current_statement.cash_and_cash_equivalents_krw,
+        current_statement.is_financial_industry
     )
     
     # 재무건전성 지표
@@ -584,7 +596,8 @@ def calculate_annual_indicators(
     
     interest_coverage, is_debt_free = calculate_interest_coverage_ratio(
         current_statement.operating_income_krw,
-        current_statement.interest_expense_krw
+        current_statement.interest_expense_krw,
+        current_statement.is_financial_industry
     )
     
     # 밸류에이션 지표
@@ -760,7 +773,8 @@ def calculate_company_indicators_summary(
         company_name=latest_statement.company_name,
         latest_fiscal_year=latest_statement.fiscal_year,
         latest_indicators=latest_indicators,
-        historical_five_year_averages=five_year_averages
+        historical_five_year_averages=five_year_averages,
+        is_financial_industry=latest_statement.is_financial_industry
     )
 
 

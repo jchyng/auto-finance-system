@@ -149,7 +149,8 @@ def test_calculate_return_on_invested_capital():
         profit_before_tax=20000000000,
         total_borrowings=30000000000,
         equity=100000000000,
-        cash=10000000000
+        cash=10000000000,
+        is_financial_industry=False
     )
     # NOPAT = 20B * (1 - 0.2) = 16B
     # IC = (30B - 10B) + 100B = 120B
@@ -163,9 +164,22 @@ def test_calculate_return_on_invested_capital():
         profit_before_tax=20000000000,
         total_borrowings=30000000000,
         equity=100000000000,
-        cash=10000000000
+        cash=10000000000,
+        is_financial_industry=False
     )
     assert roic_abnormal == 13.3
+
+    # 금융업 (업종 특성상 None 반환)
+    roic_financial = calculate_return_on_invested_capital(
+        operating_income=20000000000,
+        income_tax_expense=4000000000,
+        profit_before_tax=20000000000,
+        total_borrowings=30000000000,
+        equity=100000000000,
+        cash=10000000000,
+        is_financial_industry=True
+    )
+    assert roic_financial is None
 
 
 # ============================================================================
@@ -212,7 +226,8 @@ def test_calculate_interest_coverage_ratio():
     # 정상 케이스
     coverage, is_debt_free = calculate_interest_coverage_ratio(
         operating_income=10000000000,
-        interest_expense=1000000000
+        interest_expense=1000000000,
+        is_financial_industry=False
     )
     assert coverage == 10.0
     assert is_debt_free is False
@@ -220,10 +235,20 @@ def test_calculate_interest_coverage_ratio():
     # 무차입 기업
     coverage, is_debt_free = calculate_interest_coverage_ratio(
         operating_income=10000000000,
-        interest_expense=0
+        interest_expense=0,
+        is_financial_industry=False
     )
     assert coverage is None
     assert is_debt_free is True
+
+    # 금융업 (이자비용이 본업의 원가이므로 배율/무차입 판정 불가)
+    coverage, is_debt_free = calculate_interest_coverage_ratio(
+        operating_income=10000000000,
+        interest_expense=1000000000,
+        is_financial_industry=True
+    )
+    assert coverage is None
+    assert is_debt_free is False
 
 
 # ============================================================================
@@ -363,3 +388,6 @@ def test_calculate_company_indicators_summary_shinhan():
     assert latest.debt_to_equity_ratio_percentage is None, "금융업은 부채비율이 None이어야 함"
     assert latest.current_ratio_percentage is None, "금융업은 유동비율이 None이어야 함"
     assert latest.enterprise_value_to_ebitda_ratio is None, "금융업은 EV/EBITDA가 None이어야 함"
+    assert latest.return_on_invested_capital_percentage is None, "금융업은 ROIC가 None이어야 함"
+    assert latest.interest_coverage_ratio is None, "금융업은 이자보상배율이 None이어야 함"
+    assert summary.is_financial_industry is True
