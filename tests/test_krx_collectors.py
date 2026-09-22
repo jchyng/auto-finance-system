@@ -12,6 +12,7 @@ from src.collectors.krx_stock_price_collector import (
 from src.collectors.krx_industry_benchmark_collector import (
     collect_industry_benchmark_data,
     load_industry_benchmark_from_fixture,
+    aggregate_industry_benchmark_from_company_ratios,
 )
 from src.models.financial_statement_models import (
     StockPriceAndMarketCapData,
@@ -129,3 +130,32 @@ def test_load_industry_benchmark_from_fixture_returns_none_for_unknown():
     """알 수 없는 종목코드는 None 반환"""
     result = load_industry_benchmark_from_fixture("999999")
     assert result is None
+
+
+def test_aggregate_industry_benchmark_from_company_ratios():
+    """G4: 개별 종목 PER/PBR 목록이 업종 평균으로 집계되는지 검증"""
+    aggregated = aggregate_industry_benchmark_from_company_ratios(
+        industry_code="264",
+        industry_name="반도체와반도체장비",
+        company_valuation_ratios=[(10.0, 1.0), (20.0, 2.0), (None, None), (-5.0, 0.0)],
+        base_date="20240329",
+    )
+
+    assert aggregated is not None
+    assert aggregated.industry_classification_code == "264"
+    assert aggregated.average_price_to_earnings_ratio == 15.0
+    assert aggregated.average_price_to_book_ratio == 1.5
+    assert aggregated.data_source_name == "KRX 정보데이터시스템(pykrx 집계)"
+
+
+def test_aggregate_industry_benchmark_returns_none_without_values():
+    """G4: 집계할 양수 PER/PBR이 없으면 None 반환 (fixture 폴백 유지)"""
+    assert (
+        aggregate_industry_benchmark_from_company_ratios(
+            industry_code="264",
+            industry_name="반도체와반도체장비",
+            company_valuation_ratios=[(None, None), (-1.0, 0.0)],
+        )
+        is None
+    )
+

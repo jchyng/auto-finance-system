@@ -45,7 +45,7 @@ def get_industry_classification_for_stock(stock_code: str) -> Optional[tuple]:
         hardcoded_mapping = {
             "005930": ("264", "반도체와반도체장비"),
             "005380": ("301", "자동차"),
-            "055550": ("401", "은행"),
+            "055550": ("401", "은행/금융지주"),
         }
         
         return hardcoded_mapping.get(stock_code)
@@ -53,6 +53,68 @@ def get_industry_classification_for_stock(stock_code: str) -> Optional[tuple]:
     except Exception as error:
         print(f"Warning: 업종 분류 조회 실패 ({stock_code}): {error}")
         return None
+
+
+def aggregate_industry_benchmark_from_company_ratios(
+    industry_code: str,
+    industry_name: str,
+    company_valuation_ratios: list,
+    base_date: Optional[str] = None,
+) -> Optional[IndustryBenchmarkData]:
+    """개별 종목의 PER/PBR 목록으로부터 업종 평균 벤치마크를 집계합니다 (G4).
+
+    Args:
+        industry_code: 업종 코드
+        industry_name: 업종명
+        company_valuation_ratios: (per, pbr) 튜플 목록 (None 허용)
+        base_date: 기준일
+
+    Returns:
+        IndustryBenchmarkData 모델 또는 None (집계할 값이 없을 때)
+    """
+    collected_per_values = [
+        per_value
+        for per_value, _ in company_valuation_ratios
+        if per_value is not None and per_value > 0
+    ]
+    collected_pbr_values = [
+        pbr_value
+        for _, pbr_value in company_valuation_ratios
+        if pbr_value is not None and pbr_value > 0
+    ]
+
+    if not collected_per_values and not collected_pbr_values:
+        return None
+
+    def calculate_rounded_average(values: list) -> Optional[float]:
+        if not values:
+            return None
+        return round(sum(values) / len(values), 1)
+
+    return IndustryBenchmarkData(
+        industry_classification_code=industry_code,
+        industry_classification_name=industry_name,
+        average_operating_profit_margin_percentage=None,
+        average_return_on_equity_percentage=None,
+        average_debt_to_equity_ratio_percentage=None,
+        average_price_to_earnings_ratio=calculate_rounded_average(
+            collected_per_values
+        ),
+        average_price_to_book_ratio=calculate_rounded_average(
+            collected_pbr_values
+        ),
+        base_date=base_date or "",
+        data_source_name="KRX 정보데이터시스템(pykrx 집계)",
+    )
+
+
+def get_latest_trading_date_string_from_stock_collector() -> str:
+    """주가 수집기와 동일한 규칙으로 최근 거래일 문자열을 반환합니다."""
+    from datetime import datetime, timedelta
+
+    base_date = datetime.now() - timedelta(days=10)
+    return base_date.strftime("%Y%m%d")
+
 
 
 def fetch_industry_benchmark_from_krx(
@@ -74,16 +136,51 @@ def fetch_industry_benchmark_from_krx(
     Note:
         pykrx는 개별 종목 PER/PBR은 제공하나 업종 평균은 직접 계산 필요.
         실제 구현 시 업종 내 전체 종목의 평균을 계산하거나 
-        KRX 공식 업종 지수 데이터를 활용해야 합니다.
-        간소화를 위해 현재는 fixture 기반으로 구현합니다.
+        네트워크/데이터 부재 시 None을 반환해 fixture 폴백을 유지합니다.
     """
     if not PYKRX_AVAILABLE:
         return None
     
-    # TODO: 실제 KRX 업종 평균 계산 로직 구현
-    # 현재는 fixture로 대체
-    print("Info: 업종 벤치마크는 현재 fixture 기반으로만 제공됩니다.")
-    return None
+    normalized_base_date = (
+        base_date
+        if base_date
+        else get_latest_trading_date_string_from_stock_collector()
+    )
+
+    try:
+        industry_tickers = pykrx_stock.get_market_ticker_list(
+            normalized_base_date, market="KOSPI"
+        )
+    except Exception as industry_error:
+        print(f"Warning: 업종 종목 목록 조회 실패: {industry_error}")
+        return None
+
+    collected_ratios = []
+    for ticker in industry_tickers:
+        try:
+            fundamental = pykrx_stock.get_market_fundamental_by_date(
+                normalized_base_date, normalized_base_date, ticker
+            )
+            if fundamental is None or fundamental.empty:
+                continue
+            latest_row = fundamental.iloc[-1]
+            collected_ratios.append((
+                float(latest_row.get("PER", 0)) or None,
+                float(latest_row.get("PBR", 0)) or None,
+            ))
+        except Exception:
+            continue
+
+        if len(collected_ratios) >= 50:
+            break
+
+    aggregated = aggregate_industry_benchmark_from_company_ratios(
+        industry_code, industry_name, collected_ratios, normalized_base_date
+    )
+    if aggregated is None:
+        print("Info: 업종 벤치마크 집계값이 없어 fixture 폴백을 사용합니다.")
+    return aggregated
+    # (위 집계 로직에서 이미 반환 처리)
 
 
 def load_industry_benchmark_from_fixture(stock_code: str) -> Optional[IndustryBenchmarkData]:

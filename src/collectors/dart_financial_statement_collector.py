@@ -36,7 +36,95 @@ def get_dart_api_key_from_environment() -> Optional[str]:
     return os.environ.get("DART_API_KEY")
 
 
+FIXTURE_SAMPLE_DATA_DESCRIPTION = (
+    "공시 기반 샘플/근사 데이터 "
+    "(손익계산서 헤드라인은 실측, 재무상태표 세부 계정은 근사 포함 가능)"
+)
+FIXTURE_SAMPLE_DATA_SHORT_LABEL = "공시 기반 샘플/근사 fixture"
+
+
+def get_fixture_sample_data_description() -> str:
+    """fixture 성격 설명 문구를 반환합니다 (G2(b) 재라벨링).
+
+    Returns:
+        fixture 데이터 성격 설명 문자열
+    """
+    return FIXTURE_SAMPLE_DATA_DESCRIPTION
+
+
+def parse_corporation_code_mapping_from_corp_code_xml(
+    corp_code_xml_bytes: bytes
+) -> Dict[str, str]:
+    """DART corpCode.xml 응답에서 종목코드→DART 기업코드 매핑을 파싱합니다 (G4).
+
+    Args:
+        corp_code_xml_bytes: corpCode.xml ZIP 해제 후 XML 바이트
+
+    Returns:
+        종목코드(6자리) → DART 기업코드(8자리) 매핑 딕셔너리
+
+    Note:
+        offline-first 원칙에 따라 네트워크 호출은 별도 함수로 분리하고,
+        본 함수는 순수 파싱만 담당합니다 (단위 테스트 가능).
+    """
+    import xml.etree.ElementTree as xml_element_tree
+
+    stock_to_corporation_mapping: Dict[str, str] = {}
+    root_element = xml_element_tree.fromstring(corp_code_xml_bytes)
+
+    for result_element in root_element.findall("list"):
+        stock_code_element = result_element.find("stock_code")
+        corporation_code_element = result_element.find("corp_code")
+
+        if stock_code_element is None or corporation_code_element is None:
+            continue
+
+        stock_code_text = (stock_code_element.text or "").strip()
+        corporation_code_text = (corporation_code_element.text or "").strip()
+
+        if len(stock_code_text) == 6 and len(corporation_code_text) == 8:
+            stock_to_corporation_mapping[stock_code_text] = corporation_code_text
+
+    return stock_to_corporation_mapping
+
+
+def download_corp_code_xml_bytes_from_dart(api_key: str) -> bytes:
+    """DART corpCode.xml ZIP을 다운로드해 해제된 XML 바이트를 반환합니다 (G4).
+
+    Args:
+        api_key: DART API Key
+
+    Returns:
+        corpCode.xml 해제 바이트
+
+    Raises:
+        RuntimeError: 다운로드/해제 실패 시
+    """
+    import io
+    import zipfile
+
+    download_url = f"{DART_CORP_CODE_URL}?crtfc_key={urllib.parse.quote(api_key)}"
+
+    try:
+        with urllib.request.urlopen(download_url, timeout=30) as response:
+            zipped_bytes = response.read()
+    except Exception as download_error:
+        raise RuntimeError(f"DART corpCode.xml 다운로드 실패: {download_error}")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zipped_bytes)) as zip_archive:
+            xml_member_name = next(
+                member_name
+                for member_name in zip_archive.namelist()
+                if member_name.lower().endswith(".xml")
+            )
+            return zip_archive.read(xml_member_name)
+    except Exception as unzip_error:
+        raise RuntimeError(f"DART corpCode.xml 압축 해제 실패: {unzip_error}")
+
+
 def fetch_corporation_code_from_dart(stock_code: str, api_key: str) -> Optional[str]:
+
     """
     종목코드(6자리)로부터 DART 고유 기업코드(8자리)를 조회합니다.
     
@@ -48,10 +136,19 @@ def fetch_corporation_code_from_dart(stock_code: str, api_key: str) -> Optional[
         8자리 DART 기업코드 또는 None (실패 시)
     
     Note:
-        실제 구현 시 DART corpCode.xml 다운로드 후 종목코드 매핑 필요.
-        간소화를 위해 현재는 하드코딩 매핑 사용.
+        corpCode.xml 실다운로드 매핑을 우선 시도하고, 실패 시 검증된
+        하드코딩 매핑으로 폴백합니다 (offline-first).
     """
-    # 주요 종목 하드코딩 매핑 (실제 배포 시 corpCode.xml 파싱 구현 필요)
+    try:
+        downloaded_xml_bytes = download_corp_code_xml_bytes_from_dart(api_key)
+        downloaded_mapping = parse_corporation_code_mapping_from_corp_code_xml(
+            downloaded_xml_bytes
+        )
+        if stock_code in downloaded_mapping:
+            return downloaded_mapping[stock_code]
+    except Exception as download_error:
+        print(f"Warning: corpCode.xml 조회 실패, 하드코딩 매핑으로 폴백: {download_error}")
+
     hardcoded_mapping = {
         "005930": "00126380",  # 삼성전자
         "005380": "00164779",  # 현대자동차
