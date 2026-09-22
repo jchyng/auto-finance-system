@@ -1,8 +1,8 @@
 """
 KRX 업종 벤치마크 수집기 (KRX Industry Benchmark Collector)
 
-pykrx 라이브러리를 통해 KRX WICS 업종 평균 지표를 수집합니다.
-- 업종 평균 PER, PBR, 부채비율, ROE 등 벤치마크 데이터 수집
+pykrx 라이브러리를 통해 KRX 업종 평균 지표를 수집합니다.
+- 동일 업종(sector) 동료 종목의 PER/PBR만 집계 (KOSPI 임의 샘플링 금지)
 - 규칙 3(모듈 독립성) 준수: 단독 CLI 실행 가능
 - 규칙 6(명확한 명명) 준수: 축약어 없는 완전한 함수명
 """
@@ -11,7 +11,7 @@ import argparse
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 try:
     from pykrx import stock as pykrx_stock
@@ -23,36 +23,218 @@ except ImportError:
 from src.models.financial_statement_models import IndustryBenchmarkData
 
 
-def get_industry_classification_for_stock(stock_code: str) -> Optional[tuple]:
+# fixture·데모용 검증된 업종 매핑 (종목코드 → 업종코드, 업종명)
+KNOWN_INDUSTRY_CLASSIFICATIONS = {
+    "005930": ("264", "반도체와반도체장비"),
+    "005380": ("301", "자동차"),
+    "055550": ("401", "은행/금융지주"),
+}
+
+FINANCIAL_INDUSTRY_NAME_KEYWORDS = (
+    "은행",
+    "증권",
+    "보험",
+    "금융지주",
+    "금융",
+    "카드",
+)
+
+
+def is_financial_industry_classification_name(industry_name: str) -> bool:
+    """업종명으로 금융업(은행/증권/보험 등) 여부를 판정합니다."""
+    if not industry_name:
+        return False
+    return any(keyword in industry_name for keyword in FINANCIAL_INDUSTRY_NAME_KEYWORDS)
+
+
+def get_industry_classification_for_stock(stock_code: str) -> Optional[Tuple[str, str]]:
     """
-    종목코드로부터 WICS 업종 분류를 조회합니다.
-    
+    종목코드로부터 업종 분류를 조회합니다.
+
     Args:
         stock_code: 6자리 종목코드
-    
+
     Returns:
         (업종코드, 업종명) 튜플 또는 None
     """
+    # 1) pykrx 업종분류 현황에서 조회 (가능하면 하드코딩보다 우선)
+    live_classification = fetch_industry_classification_from_sector_table(stock_code)
+    if live_classification:
+        return live_classification
+
+    # 2) 검증된 fixture 종목 폴백
+    return KNOWN_INDUSTRY_CLASSIFICATIONS.get(stock_code)
+
+
+def fetch_industry_classification_from_sector_table(
+    stock_code: str,
+    base_date: Optional[str] = None,
+) -> Optional[Tuple[str, str]]:
+    """pykrx 업종분류 표에서 종목의 업종명/코드를 조회합니다."""
     if not PYKRX_AVAILABLE:
         return None
-    
+
+    normalized_base_date = base_date or get_latest_trading_date_string_from_stock_collector()
+
+    for market_name in ("KOSPI", "KOSDAQ"):
+        try:
+            sector_dataframe = pykrx_stock.get_market_sector_classifications(
+                normalized_base_date, market_name
+            )
+        except Exception as error:
+            print(f"Warning: 업종분류 조회 실패 ({market_name}): {error}")
+            continue
+
+        if sector_dataframe is None or getattr(sector_dataframe, "empty", True):
+            continue
+
+        peer_rows = extract_peer_rows_matching_stock(
+            sector_dataframe, stock_code
+        )
+        if peer_rows is None:
+            # 종목 자체 행만 찾기
+            own_row = find_stock_row_in_sector_dataframe(sector_dataframe, stock_code)
+            if own_row is None:
+                continue
+            industry_name = extract_industry_name_from_sector_row(own_row)
+            if not industry_name:
+                continue
+            return (industry_name, industry_name)
+
+        industry_name = peer_rows[0][1]
+        return (industry_name, industry_name)
+
+    return None
+
+
+def find_stock_row_in_sector_dataframe(sector_dataframe, stock_code: str):
+    """업종분류 DataFrame에서 종목 행을 찾습니다."""
     try:
-        # pykrx로 종목의 업종 정보 조회
-        sector_name = pykrx_stock.get_market_ticker_name(stock_code)
-        
-        # WICS 업종 매핑 (실제로는 pykrx의 sector 정보 활용)
-        # 간소화를 위해 주요 종목 하드코딩
-        hardcoded_mapping = {
-            "005930": ("264", "반도체와반도체장비"),
-            "005380": ("301", "자동차"),
-            "055550": ("401", "은행/금융지주"),
-        }
-        
-        return hardcoded_mapping.get(stock_code)
-    
-    except Exception as error:
-        print(f"Warning: 업종 분류 조회 실패 ({stock_code}): {error}")
+        if stock_code in sector_dataframe.index:
+            return sector_dataframe.loc[stock_code]
+    except Exception:
+        pass
+
+    for column_name in ("티커", "종목코드", "단축코드", "종목"):
+        if column_name not in getattr(sector_dataframe, "columns", []):
+            continue
+        matched = sector_dataframe[sector_dataframe[column_name].astype(str) == stock_code]
+        if not matched.empty:
+            return matched.iloc[0]
+    return None
+
+
+def extract_industry_name_from_sector_row(sector_row) -> Optional[str]:
+    """업종분류 행에서 업종명 컬럼을 추출합니다."""
+    for column_name in ("업종명", "지수업종대분류", "업종", "sector", "산업"):
+        try:
+            value = sector_row[column_name] if column_name in sector_row.index else None
+        except Exception:
+            value = None
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def extract_peer_rows_matching_stock(
+    sector_dataframe,
+    stock_code: str,
+) -> Optional[List[Tuple[str, str]]]:
+    """
+    동일 업종 동료 (ticker, industry_name) 목록을 반환합니다.
+
+    Returns:
+        동료 목록 또는 종목/업종을 찾지 못하면 None
+    """
+    own_row = find_stock_row_in_sector_dataframe(sector_dataframe, stock_code)
+    if own_row is None:
         return None
+
+    industry_name = extract_industry_name_from_sector_row(own_row)
+    if not industry_name:
+        return None
+
+    peers: List[Tuple[str, str]] = []
+    industry_column = None
+    for column_name in ("업종명", "지수업종대분류", "업종", "sector", "산업"):
+        if column_name in getattr(sector_dataframe, "columns", []):
+            industry_column = column_name
+            break
+
+    if industry_column is None:
+        return [(stock_code, industry_name)]
+
+    matched = sector_dataframe[
+        sector_dataframe[industry_column].astype(str).str.strip() == industry_name
+    ]
+    for ticker_value, row in matched.iterrows():
+        ticker = str(ticker_value)
+        if "티커" in matched.columns:
+            ticker = str(row["티커"])
+        elif len(ticker) != 6:
+            continue
+        peers.append((ticker.zfill(6), industry_name))
+
+    return peers or [(stock_code, industry_name)]
+
+
+def resolve_industry_peer_tickers(
+    stock_code: str,
+    industry_name: str,
+    base_date: Optional[str] = None,
+    maximum_peer_count: int = 50,
+) -> List[str]:
+    """
+    동일 업종 동료 종목코드 목록을 반환합니다.
+
+    KOSPI 전 종목 임의 샘플링은 하지 않습니다. 업종 동료를 확정할 수 없으면 빈 목록.
+    """
+    if not PYKRX_AVAILABLE:
+        return []
+
+    normalized_base_date = base_date or get_latest_trading_date_string_from_stock_collector()
+    peer_tickers: List[str] = []
+
+    for market_name in ("KOSPI", "KOSDAQ"):
+        try:
+            sector_dataframe = pykrx_stock.get_market_sector_classifications(
+                normalized_base_date, market_name
+            )
+        except Exception:
+            continue
+
+        if sector_dataframe is None or getattr(sector_dataframe, "empty", True):
+            continue
+
+        peers = extract_peer_rows_matching_stock(sector_dataframe, stock_code)
+        if not peers:
+            # 업종명으로 직접 필터 (종목 행을 못 찾은 경우)
+            for column_name in ("업종명", "지수업종대분류", "업종"):
+                if column_name not in getattr(sector_dataframe, "columns", []):
+                    continue
+                matched = sector_dataframe[
+                    sector_dataframe[column_name].astype(str).str.strip() == industry_name
+                ]
+                for ticker_value in matched.index:
+                    ticker = str(ticker_value)
+                    if len(ticker) == 6:
+                        peer_tickers.append(ticker)
+                break
+            continue
+
+        peer_tickers.extend(ticker for ticker, _ in peers)
+
+    # 중복 제거, 대상 종목 포함 유지, 상한
+    unique_peers: List[str] = []
+    seen = set()
+    for ticker in peer_tickers:
+        if ticker not in seen:
+            seen.add(ticker)
+            unique_peers.append(ticker)
+        if len(unique_peers) >= maximum_peer_count:
+            break
+
+    return unique_peers
 
 
 def aggregate_industry_benchmark_from_company_ratios(
@@ -104,59 +286,64 @@ def aggregate_industry_benchmark_from_company_ratios(
             collected_pbr_values
         ),
         base_date=base_date or "",
-        data_source_name="KRX 정보데이터시스템(pykrx 집계)",
+        data_source_name="KRX 정보데이터시스템(pykrx 동업종 집계)",
     )
 
 
 def get_latest_trading_date_string_from_stock_collector() -> str:
     """주가 수집기와 동일한 규칙으로 최근 거래일 문자열을 반환합니다."""
-    from datetime import datetime, timedelta
-
     base_date = datetime.now() - timedelta(days=10)
     return base_date.strftime("%Y%m%d")
-
 
 
 def fetch_industry_benchmark_from_krx(
     industry_code: str,
     industry_name: str,
-    base_date: Optional[str] = None
+    base_date: Optional[str] = None,
+    stock_code: Optional[str] = None,
 ) -> Optional[IndustryBenchmarkData]:
     """
-    pykrx를 통해 KRX 업종 평균 지표를 수집합니다.
-    
+    pykrx를 통해 동일 업종 동료의 PER/PBR 평균을 수집합니다.
+
     Args:
         industry_code: 업종 코드
         industry_name: 업종명
         base_date: 기준일 (YYYYMMDD 형식)
-    
+        stock_code: 대상 종목 (동료 필터링에 사용)
+
     Returns:
         IndustryBenchmarkData 모델 또는 None
-    
+
     Note:
-        pykrx는 개별 종목 PER/PBR은 제공하나 업종 평균은 직접 계산 필요.
-        실제 구현 시 업종 내 전체 종목의 평균을 계산하거나 
-        네트워크/데이터 부재 시 None을 반환해 fixture 폴백을 유지합니다.
+        업종 동료를 확정할 수 없으면 None을 반환해 fixture 폴백을 유지합니다.
+        KOSPI 전 종목의 앞에서 N개를 샘플링하지 않습니다.
     """
     if not PYKRX_AVAILABLE:
         return None
-    
+
+    if not stock_code:
+        print("Info: 종목코드 없이 업종 동료를 확정할 수 없어 fixture 폴백을 사용합니다.")
+        return None
+
     normalized_base_date = (
         base_date
         if base_date
         else get_latest_trading_date_string_from_stock_collector()
     )
 
-    try:
-        industry_tickers = pykrx_stock.get_market_ticker_list(
-            normalized_base_date, market="KOSPI"
+    peer_tickers = resolve_industry_peer_tickers(
+        stock_code=stock_code,
+        industry_name=industry_name,
+        base_date=normalized_base_date,
+    )
+    if not peer_tickers:
+        print(
+            f"Info: '{industry_name}' 동업종 동료를 확정할 수 없어 fixture 폴백을 사용합니다."
         )
-    except Exception as industry_error:
-        print(f"Warning: 업종 종목 목록 조회 실패: {industry_error}")
         return None
 
     collected_ratios = []
-    for ticker in industry_tickers:
+    for ticker in peer_tickers:
         try:
             fundamental = pykrx_stock.get_market_fundamental_by_date(
                 normalized_base_date, normalized_base_date, ticker
@@ -164,15 +351,14 @@ def fetch_industry_benchmark_from_krx(
             if fundamental is None or fundamental.empty:
                 continue
             latest_row = fundamental.iloc[-1]
+            per_raw = latest_row.get("PER", 0)
+            pbr_raw = latest_row.get("PBR", 0)
             collected_ratios.append((
-                float(latest_row.get("PER", 0)) or None,
-                float(latest_row.get("PBR", 0)) or None,
+                float(per_raw) if per_raw else None,
+                float(pbr_raw) if pbr_raw else None,
             ))
         except Exception:
             continue
-
-        if len(collected_ratios) >= 50:
-            break
 
     aggregated = aggregate_industry_benchmark_from_company_ratios(
         industry_code, industry_name, collected_ratios, normalized_base_date
@@ -180,7 +366,6 @@ def fetch_industry_benchmark_from_krx(
     if aggregated is None:
         print("Info: 업종 벤치마크 집계값이 없어 fixture 폴백을 사용합니다.")
     return aggregated
-    # (위 집계 로직에서 이미 반환 처리)
 
 
 def load_industry_benchmark_from_fixture(stock_code: str) -> Optional[IndustryBenchmarkData]:
@@ -240,21 +425,22 @@ def collect_industry_benchmark_data(
     Raises:
         ValueError: 데이터 수집 실패 시
     """
-    # pykrx로 수집 시도
     if PYKRX_AVAILABLE:
         industry_info = get_industry_classification_for_stock(stock_code)
         
         if industry_info:
             industry_code, industry_name = industry_info
             result = fetch_industry_benchmark_from_krx(
-                industry_code, industry_name, base_date
+                industry_code,
+                industry_name,
+                base_date,
+                stock_code=stock_code,
             )
             
             if result:
                 print(f"Success: KRX에서 {industry_name} 업종 벤치마크 수집 완료")
                 return result
     
-    # fixture fallback
     if use_fixture_fallback:
         print(f"Info: Fixture JSON에서 업종 벤치마크 로드 시도 (종목코드: {stock_code})")
         fixture_result = load_industry_benchmark_from_fixture(stock_code)

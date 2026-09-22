@@ -38,12 +38,13 @@ class NormalizedFinancialStatement:
     cash_and_cash_equivalents_krw: int                     # 현금및현금성자산
     
     # 현금흐름표 및 감가상각 항목 (FCF, EBITDA 산출용, 원 단위)
-    operating_cash_flow_krw: int                           # 영업활동현금흐름
-    acquisition_of_tangible_assets_krw: int                # 유형자산의취득 (자본적 지출 CAPEX 1)
-    acquisition_of_intangible_assets_krw: int              # 무형자산의취득 (자본적 지출 CAPEX 2)
+    # None = 계정 미매칭(결측). 0으로 치환하지 않음(무차입·FCF=0 오판 방지)
+    operating_cash_flow_krw: Optional[int]                 # 영업활동현금흐름
+    acquisition_of_tangible_assets_krw: Optional[int]      # 유형자산의취득 (CAPEX, DART는 음수 유출일 수 있음)
+    acquisition_of_intangible_assets_krw: Optional[int]    # 무형자산의취득 (CAPEX)
     tangible_asset_depreciation_krw: int                   # 유형자산감가상각비
     intangible_asset_amortization_krw: int                 # 무형자산상각비
-    interest_expense_krw: int                              # 이자비용 (손익/현금흐름표 기준)
+    interest_expense_krw: Optional[int]                    # 이자비용 (None=미매칭, 0=무차입)
     
     # 메타데이터
     is_financial_industry: bool                            # 금융업종 여부 (은행/증권/보험 등)

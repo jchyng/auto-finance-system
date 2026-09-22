@@ -145,7 +145,7 @@ def test_aggregate_industry_benchmark_from_company_ratios():
     assert aggregated.industry_classification_code == "264"
     assert aggregated.average_price_to_earnings_ratio == 15.0
     assert aggregated.average_price_to_book_ratio == 1.5
-    assert aggregated.data_source_name == "KRX 정보데이터시스템(pykrx 집계)"
+    assert aggregated.data_source_name == "KRX 정보데이터시스템(pykrx 동업종 집계)"
 
 
 def test_aggregate_industry_benchmark_returns_none_without_values():
@@ -158,4 +158,34 @@ def test_aggregate_industry_benchmark_returns_none_without_values():
         )
         is None
     )
+
+
+def test_is_financial_industry_classification_name():
+    """업종명 기반 금융업 판정"""
+    from src.collectors.krx_industry_benchmark_collector import (
+        is_financial_industry_classification_name,
+    )
+
+    assert is_financial_industry_classification_name("은행/금융지주") is True
+    assert is_financial_industry_classification_name("반도체와반도체장비") is False
+
+
+def test_resolve_industry_peer_tickers_does_not_use_kospi_head_sample(monkeypatch):
+    """동업종 동료를 못 찾으면 빈 목록(KOSPI 앞 N개 샘플링 금지)"""
+    from src.collectors import krx_industry_benchmark_collector as module
+
+    monkeypatch.setattr(module, "PYKRX_AVAILABLE", True)
+
+    class DummyStock:
+        @staticmethod
+        def get_market_sector_classifications(date, market):
+            raise RuntimeError("sector api unavailable")
+
+    monkeypatch.setattr(module, "pykrx_stock", DummyStock)
+    peers = module.resolve_industry_peer_tickers(
+        stock_code="005930",
+        industry_name="반도체와반도체장비",
+        base_date="20240329",
+    )
+    assert peers == []
 

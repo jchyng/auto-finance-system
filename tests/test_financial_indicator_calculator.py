@@ -88,6 +88,15 @@ def test_calculate_free_cash_flow():
     )
     assert negative_fcf == -45000000000
 
+    # DART 음수(유출) CAPEX도 절댓값으로 차감
+    fcf_from_negative_capex = calculate_free_cash_flow(
+        operating_cash_flow=50000000000,
+        acquisition_of_tangible_assets=-30000000000,
+        acquisition_of_intangible_assets=-5000000000,
+    )
+    assert fcf_from_negative_capex == 15000000000
+    assert calculate_free_cash_flow(None, 100, 100) is None
+
 
 def test_calculate_fcf_growth_rate():
     """FCF 성장률 계산 테스트"""
@@ -202,6 +211,9 @@ def test_calculate_debt_to_equity_ratio():
     # 자본이 0 (None 반환)
     assert calculate_debt_to_equity_ratio(50000000000, 0, False) is None
 
+    # 자본잠식(음수 자본)도 None — 음수 비율이 양호로 오판되지 않도록
+    assert calculate_debt_to_equity_ratio(50000000000, -10000000000, False) is None
+
 
 def test_calculate_current_ratio():
     """유동비율 계산 테스트"""
@@ -246,6 +258,15 @@ def test_calculate_interest_coverage_ratio():
         operating_income=10000000000,
         interest_expense=1000000000,
         is_financial_industry=True
+    )
+    assert coverage is None
+    assert is_debt_free is False
+
+    # 이자비용 계정 미매칭(None) → 무차입 오판 금지
+    coverage, is_debt_free = calculate_interest_coverage_ratio(
+        operating_income=10000000000,
+        interest_expense=None,
+        is_financial_industry=False,
     )
     assert coverage is None
     assert is_debt_free is False

@@ -228,6 +228,16 @@ def test_evaluate_debt_to_equity_ratio_not_applicable():
     assert "금융업" in reason or "데이터가 부족합니다" in reason
 
 
+def test_evaluate_debt_to_equity_ratio_negative_is_caution():
+    """음수 부채비율(자본잠식)은 양호가 아니라 주의"""
+    status, reason = evaluate_debt_to_equity_ratio(
+        current_value=-50.0,
+        five_year_average=None,
+    )
+    assert status == IndicatorEvaluationStatus.CAUTION
+    assert "자본잠식" in reason
+
+
 def test_evaluate_current_ratio_good():
     """유동비율 '양호' 판정 테스트 (150% 이상)"""
     status, reason = evaluate_current_ratio(
@@ -320,7 +330,7 @@ def test_evaluate_interest_coverage_ratio_caution():
 # ============================================================================
 
 def test_evaluate_valuation_ratio_lower_than_average():
-    """밸류에이션 비율 '과거/업종 대비 낮음' 테스트"""
+    """밸류에이션 비율 '과거/업종 대비 낮음' → 양호"""
     status, reason = evaluate_valuation_ratio(
         indicator_name_korean="PER",
         current_value=10.0,
@@ -329,13 +339,13 @@ def test_evaluate_valuation_ratio_lower_than_average():
         unit="배"
     )
     
-    assert status == IndicatorEvaluationStatus.NORMAL
+    assert status == IndicatorEvaluationStatus.GOOD
     assert "10.0배" in reason
     assert "낮습니다" in reason
 
 
 def test_evaluate_valuation_ratio_higher_than_average():
-    """밸류에이션 비율 '과거/업종 대비 높음' 테스트"""
+    """밸류에이션 비율 '과거/업종 대비 높음' → 주의"""
     status, reason = evaluate_valuation_ratio(
         indicator_name_korean="PBR",
         current_value=25.0,
@@ -344,7 +354,7 @@ def test_evaluate_valuation_ratio_higher_than_average():
         unit="배"
     )
     
-    assert status == IndicatorEvaluationStatus.NORMAL
+    assert status == IndicatorEvaluationStatus.CAUTION
     assert "25.0배" in reason
     assert "높습니다" in reason
 

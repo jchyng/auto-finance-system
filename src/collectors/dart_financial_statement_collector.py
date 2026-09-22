@@ -47,7 +47,41 @@ def get_known_company_profile(stock_code: str) -> tuple:
     return KNOWN_COMPANY_PROFILES.get(stock_code, ("", stock_code, False))
 
 
+def resolve_company_name_and_financial_flag(
+    stock_code: str,
+) -> tuple:
+    """
+    기업명·금융업 여부를 해석합니다.
 
+    우선순위:
+    1) KRX 업종 분류명 기반 금융업 판정 + pykrx 종목명
+    2) 검증된 KNOWN_COMPANY_PROFILES 폴백
+    """
+    known_code, known_name, known_is_financial = get_known_company_profile(stock_code)
+    company_name = known_name
+    is_financial = known_is_financial
+
+    try:
+        from src.collectors.krx_industry_benchmark_collector import (
+            get_industry_classification_for_stock,
+            is_financial_industry_classification_name,
+        )
+        industry_info = get_industry_classification_for_stock(stock_code)
+        if industry_info:
+            _, industry_name = industry_info
+            is_financial = is_financial_industry_classification_name(industry_name)
+    except Exception as error:
+        print(f"Warning: 업종 기반 금융업 판정 실패, 프로필 폴백 사용: {error}")
+
+    try:
+        from pykrx import stock as pykrx_stock
+        live_name = pykrx_stock.get_market_ticker_name(stock_code)
+        if live_name:
+            company_name = live_name
+    except Exception:
+        pass
+
+    return company_name, is_financial
 def get_dart_api_key_from_environment() -> Optional[str]:
     """
     환경변수에서 DART API Key를 가져옵니다.
@@ -360,8 +394,8 @@ def collect_normalized_financial_statements(
                 
                 if raw_statements:
                     print(f"Success: DART API로부터 {len(raw_statements)}개 연도 재무제표 수집 완료")
-                    _, live_company_name, live_is_financial = get_known_company_profile(
-                        stock_code
+                    live_company_name, live_is_financial = (
+                        resolve_company_name_and_financial_flag(stock_code)
                     )
                     normalized_live_statements = (
                         convert_dart_raw_statements_to_normalized_statements(
@@ -372,6 +406,11 @@ def collect_normalized_financial_statements(
                         )
                     )
                     if normalized_live_statements:
+                        if len(normalized_live_statements) < number_of_years:
+                            print(
+                                f"Warning: 요청 {number_of_years}개년 중 "
+                                f"{len(normalized_live_statements)}개년만 정제되었습니다."
+                            )
                         return normalized_live_statements
                     print("Warning: DART API 원본 정제 결과가 비어 fixture 폴백을 시도합니다")
             except Exception as error:
@@ -387,8 +426,25 @@ def collect_normalized_financial_statements(
                 NormalizedFinancialStatement.from_dictionary(stmt)
                 for stmt in fixture_statements
             ]
-            print(f"Success: Fixture에서 {len(normalized_statements)}개 연도 재무제표 로드 완료")
-            return normalized_statements
+            # 요청 연도·개수에 맞게 필터 (가능하면 무시하지 않음)
+            filtered_statements = [
+                stmt for stmt in normalized_statements
+                if stmt.fiscal_year <= fiscal_year
+            ]
+            filtered_statements.sort(key=lambda item: item.fiscal_year, reverse=True)
+            filtered_statements = filtered_statements[:number_of_years]
+            if not filtered_statements:
+                filtered_statements = sorted(
+                    normalized_statements,
+                    key=lambda item: item.fiscal_year,
+                    reverse=True,
+                )[:number_of_years]
+                print(
+                    f"Warning: 요청 연도({fiscal_year})에 맞는 fixture가 없어 "
+                    f"가용 최신 {len(filtered_statements)}개년을 사용합니다."
+                )
+            print(f"Success: Fixture에서 {len(filtered_statements)}개 연도 재무제표 로드 완료")
+            return filtered_statements
     
     raise ValueError(
         f"재무제표 수집 실패: DART_API_KEY 환경변수가 설정되지 않았고, "

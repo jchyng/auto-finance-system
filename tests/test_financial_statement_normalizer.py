@@ -93,6 +93,7 @@ def test_normalize_dart_financial_statement_financial_industry():
     mock_accounts = [
         {"account_nm": "영업수익", "thstrm_amount": "10000000000000"},
         {"account_nm": "영업이익", "thstrm_amount": "2000000000000"},
+        {"account_nm": "당기순이익", "thstrm_amount": "1500000000000"},
         {"account_nm": "자산총계", "thstrm_amount": "500000000000000"},
         {"account_nm": "부채총계", "thstrm_amount": "450000000000000"},
         {"account_nm": "자본총계", "thstrm_amount": "50000000000000"},

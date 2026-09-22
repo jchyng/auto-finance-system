@@ -6,8 +6,8 @@
 규칙 6에 따라 모든 필드명은 단위(percentage, krw, ratio)를 포함한 완전한 명칭을 사용합니다.
 """
 
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, asdict, field
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -96,6 +96,8 @@ class CompanyInvestmentIndicatorsSummary:
     latest_indicators: AnnualCalculatedIndicators
     historical_five_year_averages: HistoricalFiveYearAverageIndicators
     is_financial_industry: bool = False                              # 금융업(은행/증권/보험) 여부 (금융업 전용 예외 판정에 사용)
+    # FCF 연속성 판정 등에 사용하는 연도별 지표 (최신→과거 내림차순)
+    annual_indicators_history: List[AnnualCalculatedIndicators] = field(default_factory=list)
 
     def to_dictionary(self) -> Dict[str, Any]:
         return asdict(self)
@@ -104,6 +106,7 @@ class CompanyInvestmentIndicatorsSummary:
     def from_dictionary(cls, data_dictionary: Dict[str, Any]) -> "CompanyInvestmentIndicatorsSummary":
         latest_dict = data_dictionary["latest_indicators"]
         historical_dict = data_dictionary["historical_five_year_averages"]
+        history_dicts = data_dictionary.get("annual_indicators_history") or []
         return cls(
             stock_code=data_dictionary["stock_code"],
             company_name=data_dictionary["company_name"],
@@ -111,4 +114,7 @@ class CompanyInvestmentIndicatorsSummary:
             latest_indicators=AnnualCalculatedIndicators.from_dictionary(latest_dict),
             historical_five_year_averages=HistoricalFiveYearAverageIndicators.from_dictionary(historical_dict),
             is_financial_industry=data_dictionary.get("is_financial_industry", False),
+            annual_indicators_history=[
+                AnnualCalculatedIndicators.from_dictionary(item) for item in history_dicts
+            ],
         )

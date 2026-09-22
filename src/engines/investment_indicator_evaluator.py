@@ -232,6 +232,13 @@ def evaluate_debt_to_equity_ratio(
             IndicatorEvaluationStatus.NOT_APPLICABLE,
             "금융업 특성상 부채비율 판정이 적합하지 않거나 데이터가 부족합니다."
         )
+
+    # 자본잠식 등으로 음수 부채비율이 넘어온 경우(레거시) 양호로 오판하지 않음
+    if current_value < 0:
+        return (
+            IndicatorEvaluationStatus.CAUTION,
+            f"당기 부채비율({current_value}%)이 음수입니다. 자본잠식 가능성이 있어 주의가 필요합니다."
+        )
     
     avg_text = f" (기업 5년 평균: {five_year_average}%)" if five_year_average else ""
     
@@ -438,16 +445,16 @@ def evaluate_valuation_ratio(
             f"{indicator_name_korean} 계산에 필요한 데이터가 부족하거나 적자로 인해 판정할 수 없습니다."
         )
     
-    # 5년 평균과 업종 평균이 모두 있는 경우
+    # 5년 평균과 업종 평균이 모두 있는 경우 (낮을수록 상대적 저평가 → 양호)
     if five_year_average is not None and industry_average is not None:
         if current_value < five_year_average and current_value < industry_average:
             return (
-                IndicatorEvaluationStatus.NORMAL,
+                IndicatorEvaluationStatus.GOOD,
                 f"당기 {indicator_name_korean}({current_value}{unit})이 기업의 5년 평균({five_year_average}{unit}) 및 업종 평균({industry_average}{unit})보다 낮습니다."
             )
         elif current_value > five_year_average and current_value > industry_average:
             return (
-                IndicatorEvaluationStatus.NORMAL,
+                IndicatorEvaluationStatus.CAUTION,
                 f"당기 {indicator_name_korean}({current_value}{unit})이 기업의 5년 평균({five_year_average}{unit}) 및 업종 평균({industry_average}{unit})보다 높습니다."
             )
         else:
@@ -466,12 +473,12 @@ def evaluate_valuation_ratio(
             )
         elif current_value < five_year_average:
             return (
-                IndicatorEvaluationStatus.NORMAL,
+                IndicatorEvaluationStatus.GOOD,
                 f"당기 {indicator_name_korean}({current_value}{unit})이 기업의 5년 평균({five_year_average}{unit})보다 낮습니다."
             )
         else:
             return (
-                IndicatorEvaluationStatus.NORMAL,
+                IndicatorEvaluationStatus.CAUTION,
                 f"당기 {indicator_name_korean}({current_value}{unit})이 기업의 5년 평균({five_year_average}{unit})보다 높습니다."
             )
     
@@ -589,10 +596,12 @@ def evaluate_all_indicators(
     # 데이터 출처 기본 정보
     data_source_base = f"DART 사업보고서 ({base_fiscal_year}년 결산 기준)"
     
-    # 과거 5개 연도 지표 수집 (FCF 판정용)
-    # Note: 실제 구현에서는 indicators_summary에 연도별 리스트가 필요
-    # 현재는 latest만 있으므로 간소화
-    historical_list = [latest]  # 실제로는 5개년 리스트 필요
+    # 과거 연도 지표 (FCF 연속성 판정용) — 최신→과거 내림차순
+    historical_list = (
+        indicators_summary.annual_indicators_history
+        if indicators_summary.annual_indicators_history
+        else [latest]
+    )
     
     evaluations = []
     

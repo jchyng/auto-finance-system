@@ -96,7 +96,7 @@ REAL_COMPANY_VERIFICATION_TARGETS = [
             "average_return_on_equity_percentage": 11.3,
             "average_debt_to_equity_ratio_percentage": 33.5,
             "average_free_cash_flow_amount_krw": 10164055000000,
-            "average_price_to_earnings_ratio": 17.0,
+            "average_price_to_earnings_ratio": 29.7,
         },
     },
     {
@@ -128,7 +128,7 @@ REAL_COMPANY_VERIFICATION_TARGETS = [
             "average_return_on_equity_percentage": 7.7,
             "average_debt_to_equity_ratio_percentage": 168.9,
             "average_free_cash_flow_amount_krw": 5920000000000,
-            "average_price_to_earnings_ratio": 12.5,
+            "average_price_to_earnings_ratio": 4.1,
         },
     },
     {
@@ -160,7 +160,7 @@ REAL_COMPANY_VERIFICATION_TARGETS = [
             "average_return_on_equity_percentage": 8.6,
             "average_debt_to_equity_ratio_percentage": None,
             "average_free_cash_flow_amount_krw": 15362000000000,
-            "average_price_to_earnings_ratio": 6.3,
+            "average_price_to_earnings_ratio": 5.6,
         },
     },
 ]
@@ -191,12 +191,10 @@ def calculate_effective_tax_rate_from_fixture(statement: Dict[str, Any]) -> floa
 
 
 def calculate_free_cash_flow_amount_from_fixture(statement: Dict[str, Any]) -> int:
-    """원본 재무제표 값으로 FCF 절대액을 계산합니다."""
-    return (
-        statement["operating_cash_flow_krw"]
-        - statement["acquisition_of_tangible_assets_krw"]
-        - statement["acquisition_of_intangible_assets_krw"]
-    )
+    """원본 재무제표 값으로 FCF 절대액을 계산합니다 (DART 음수 CAPEX 절댓값 정규화)."""
+    tangible = statement["acquisition_of_tangible_assets_krw"] or 0
+    intangible = statement["acquisition_of_intangible_assets_krw"] or 0
+    return statement["operating_cash_flow_krw"] - abs(tangible) - abs(intangible)
 
 
 def round_to_one_decimal(value: float) -> float:
@@ -209,6 +207,7 @@ def recompute_annual_indicators_from_fixture(
     previous_statement: Optional[Dict[str, Any]],
     stock_price_and_market_cap: Dict[str, Any],
     is_financial_industry: bool,
+    include_valuation_indicators: bool = True,
 ) -> Dict[str, Any]:
     """
     원본 공시 값만으로 한 사업연도의 15개 지표를 순수 사칙연산으로 재계산합니다.
@@ -251,14 +250,13 @@ def recompute_annual_indicators_from_fixture(
         else round_to_one_decimal(net_operating_profit_after_tax_krw / invested_capital_krw * 100)
     )
 
-    # 재무건전성 (금융업 예외 처리 포함)
+    # 재무건전성 (금융업 예외 처리 포함) — 자본 ≤ 0 이면 None
+    equity_krw = current_statement["controlling_interest_equity_krw"]
     recomputed_indicators["debt_to_equity_ratio_percentage"] = (
         None
-        if is_financial_industry
+        if is_financial_industry or equity_krw <= 0
         else round_to_one_decimal(
-            current_statement["total_liabilities_krw"]
-            / current_statement["controlling_interest_equity_krw"]
-            * 100
+            current_statement["total_liabilities_krw"] / equity_krw * 100
         )
     )
     is_current_ratio_applicable = (
@@ -274,45 +272,51 @@ def recompute_annual_indicators_from_fixture(
         if is_current_ratio_applicable
         else None
     )
+    interest_expense = current_statement.get("interest_expense_krw")
     recomputed_indicators["interest_coverage_ratio"] = (
         None
-        if is_financial_industry or current_statement["interest_expense_krw"] == 0
+        if is_financial_industry or interest_expense is None or interest_expense == 0
         else round_to_one_decimal(
-            current_statement["operating_income_krw"] / current_statement["interest_expense_krw"]
+            current_statement["operating_income_krw"] / interest_expense
         )
     )
     recomputed_indicators["free_cash_flow_amount_krw"] = current_free_cash_flow_krw
 
-    # 밸류에이션 (금융업은 EV/EBITDA 판단불가)
-    recomputed_indicators["price_to_earnings_ratio"] = (
-        round_to_one_decimal(
-            market_capitalization_krw / current_statement["controlling_interest_net_income_krw"]
+    # 밸류에이션: 최신 연도만 (현재 시총을 과거 연도에 재사용하지 않음)
+    if include_valuation_indicators:
+        recomputed_indicators["price_to_earnings_ratio"] = (
+            round_to_one_decimal(
+                market_capitalization_krw / current_statement["controlling_interest_net_income_krw"]
+            )
+            if current_statement["controlling_interest_net_income_krw"] > 0
+            else None
         )
-        if current_statement["controlling_interest_net_income_krw"] > 0
-        else None
-    )
-    recomputed_indicators["price_to_book_ratio"] = (
-        round_to_one_decimal(
-            market_capitalization_krw / current_statement["controlling_interest_equity_krw"]
+        recomputed_indicators["price_to_book_ratio"] = (
+            round_to_one_decimal(
+                market_capitalization_krw / current_statement["controlling_interest_equity_krw"]
+            )
+            if current_statement["controlling_interest_equity_krw"] > 0
+            else None
         )
-        if current_statement["controlling_interest_equity_krw"] > 0
-        else None
-    )
-    ebitda_krw = (
-        current_statement["operating_income_krw"]
-        + current_statement["tangible_asset_depreciation_krw"]
-        + current_statement["intangible_asset_amortization_krw"]
-    )
-    enterprise_value_krw = (
-        market_capitalization_krw
-        + total_borrowings_krw
-        - current_statement["cash_and_cash_equivalents_krw"]
-    )
-    recomputed_indicators["enterprise_value_to_ebitda_ratio"] = (
-        round_to_one_decimal(enterprise_value_krw / ebitda_krw)
-        if not is_financial_industry and ebitda_krw > 0
-        else None
-    )
+        ebitda_krw = (
+            current_statement["operating_income_krw"]
+            + current_statement["tangible_asset_depreciation_krw"]
+            + current_statement["intangible_asset_amortization_krw"]
+        )
+        enterprise_value_krw = (
+            market_capitalization_krw
+            + total_borrowings_krw
+            - current_statement["cash_and_cash_equivalents_krw"]
+        )
+        recomputed_indicators["enterprise_value_to_ebitda_ratio"] = (
+            round_to_one_decimal(enterprise_value_krw / ebitda_krw)
+            if not is_financial_industry and ebitda_krw > 0
+            else None
+        )
+    else:
+        recomputed_indicators["price_to_earnings_ratio"] = None
+        recomputed_indicators["price_to_book_ratio"] = None
+        recomputed_indicators["enterprise_value_to_ebitda_ratio"] = None
 
     # 전기 데이터가 있는 경우 성장성 및 평균자본 지표 계산
     if previous_statement is not None:
@@ -389,6 +393,7 @@ def recompute_latest_and_average_indicators(
                 previous_statement=previous_statement,
                 stock_price_and_market_cap=stock_price_and_market_cap,
                 is_financial_industry=is_financial_industry,
+                include_valuation_indicators=(index == 0),
             )
         )
 

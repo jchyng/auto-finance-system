@@ -121,25 +121,38 @@ def calculate_eps_growth_rate(
 
 
 def calculate_free_cash_flow(
-    operating_cash_flow: int,
-    acquisition_of_tangible_assets: int,
-    acquisition_of_intangible_assets: int
-) -> int:
+    operating_cash_flow: Optional[int],
+    acquisition_of_tangible_assets: Optional[int],
+    acquisition_of_intangible_assets: Optional[int]
+) -> Optional[int]:
     """
     잉여현금흐름(FCF)을 계산합니다.
     
     공식: 영업활동현금흐름 - (유형자산취득 + 무형자산취득)
+    DART 현금흐름표의 취득액은 흔히 음수(유출)로 표기되므로 절댓값으로 정규화합니다.
     
     Args:
-        operating_cash_flow: 영업활동현금흐름 (원)
-        acquisition_of_tangible_assets: 유형자산취득 (원, 양수)
-        acquisition_of_intangible_assets: 무형자산취득 (원, 양수)
+        operating_cash_flow: 영업활동현금흐름 (원) 또는 None(결측)
+        acquisition_of_tangible_assets: 유형자산취득 (원) 또는 None
+        acquisition_of_intangible_assets: 무형자산취득 (원) 또는 None
     
     Returns:
-        FCF (원)
+        FCF (원) 또는 None (필수 현금흐름 항목 결측 시)
     """
-    fcf = operating_cash_flow - (acquisition_of_tangible_assets + acquisition_of_intangible_assets)
-    return fcf
+    if operating_cash_flow is None:
+        return None
+
+    tangible_capex = (
+        abs(acquisition_of_tangible_assets)
+        if acquisition_of_tangible_assets is not None
+        else 0
+    )
+    intangible_capex = (
+        abs(acquisition_of_intangible_assets)
+        if acquisition_of_intangible_assets is not None
+        else 0
+    )
+    return operating_cash_flow - (tangible_capex + intangible_capex)
 
 
 def calculate_fcf_growth_rate(
@@ -329,7 +342,8 @@ def calculate_debt_to_equity_ratio(
     if is_financial_industry:
         return None
     
-    if equity == 0:
+    # 자본잠식(자본 ≤ 0)은 비율 산출 불가 — 음수 비율이 '양호'로 오판되지 않도록 None
+    if equity <= 0:
         return None
     
     debt_ratio = (total_liabilities / equity) * 100
@@ -366,7 +380,7 @@ def calculate_current_ratio(
 
 def calculate_interest_coverage_ratio(
     operating_income: int,
-    interest_expense: int,
+    interest_expense: Optional[int],
     is_financial_industry: bool
 ) -> Tuple[Optional[float], bool]:
     """
@@ -376,16 +390,21 @@ def calculate_interest_coverage_ratio(
     
     Args:
         operating_income: 영업이익 (원)
-        interest_expense: 이자비용 (원)
+        interest_expense: 이자비용 (원). None=계정 미매칭, 0=무차입
+        is_financial_industry: 금융업 여부
     
     Returns:
-        (이자보상배율 (배), 무차입여부) 튜플 (금융업은 (None, False))
+        (이자보상배율 (배), 무차입여부) 튜플 (금융업·결측은 (None, False))
     """
     # 금융업 예외: 업종 특성상 이자보상배율 판정 부적합
     if is_financial_industry:
         return (None, False)
 
-    # 무차입 기업 (이자비용 = 0)
+    # 이자비용 계정 미매칭 → 무차입으로 오판하지 않음
+    if interest_expense is None:
+        return (None, False)
+
+    # 무차입 기업 (이자비용이 명시적으로 0)
     if interest_expense == 0:
         return (None, True)
     
@@ -494,7 +513,8 @@ def calculate_enterprise_value_to_ebitda_ratio(
 def calculate_annual_indicators(
     current_statement: NormalizedFinancialStatement,
     previous_statement: Optional[NormalizedFinancialStatement],
-    stock_price_data: StockPriceAndMarketCapData
+    stock_price_data: Optional[StockPriceAndMarketCapData],
+    include_valuation_indicators: bool = True,
 ) -> AnnualCalculatedIndicators:
     """
     한 해의 15개 투자지표를 모두 계산합니다.
@@ -502,7 +522,9 @@ def calculate_annual_indicators(
     Args:
         current_statement: 당기 재무제표
         previous_statement: 전기 재무제표 (없으면 성장률 계산 불가)
-        stock_price_data: 주가 및 시가총액 데이터
+        stock_price_data: 주가 및 시가총액 데이터 (밸류·EPS용)
+        include_valuation_indicators: False면 PER/PBR/EV를 계산하지 않음
+            (과거 연도에 현재 시총을 적용해 5년 평균이 왜곡되는 것을 방지)
     
     Returns:
         AnnualCalculatedIndicators 모델
@@ -523,6 +545,10 @@ def calculate_annual_indicators(
     eps_growth = None
     fcf_growth = None
     
+    shares_outstanding = (
+        stock_price_data.total_shares_outstanding if stock_price_data else 0
+    )
+
     if previous_statement:
         revenue_growth = calculate_revenue_growth_rate(
             current_statement.revenue_krw,
@@ -534,19 +560,21 @@ def calculate_annual_indicators(
             previous_statement.operating_income_krw
         )
         
-        eps_growth = calculate_eps_growth_rate(
-            current_statement.controlling_interest_net_income_krw,
-            previous_statement.controlling_interest_net_income_krw,
-            stock_price_data.total_shares_outstanding,
-            stock_price_data.total_shares_outstanding  # 간소화: 동일 주식수 사용
-        )
+        if shares_outstanding > 0:
+            eps_growth = calculate_eps_growth_rate(
+                current_statement.controlling_interest_net_income_krw,
+                previous_statement.controlling_interest_net_income_krw,
+                shares_outstanding,
+                shares_outstanding  # 연도별 수정주식수 부재 시 동일 주식수 사용
+            )
         
         previous_fcf = calculate_free_cash_flow(
             previous_statement.operating_cash_flow_krw,
             previous_statement.acquisition_of_tangible_assets_krw,
             previous_statement.acquisition_of_intangible_assets_krw
         )
-        fcf_growth = calculate_fcf_growth_rate(current_fcf, previous_fcf)
+        if current_fcf is not None and previous_fcf is not None:
+            fcf_growth = calculate_fcf_growth_rate(current_fcf, previous_fcf)
     
     # 수익성 지표
     operating_margin = calculate_operating_profit_margin(
@@ -600,26 +628,28 @@ def calculate_annual_indicators(
         current_statement.is_financial_industry
     )
     
-    # 밸류에이션 지표
-    per = calculate_price_to_earnings_ratio(
-        stock_price_data.market_capitalization_krw,
-        current_statement.controlling_interest_net_income_krw
-    )
-    
-    pbr = calculate_price_to_book_ratio(
-        stock_price_data.market_capitalization_krw,
-        current_statement.controlling_interest_equity_krw
-    )
-    
-    ev_ebitda = calculate_enterprise_value_to_ebitda_ratio(
-        stock_price_data.market_capitalization_krw,
-        total_borrowings,
-        current_statement.cash_and_cash_equivalents_krw,
-        current_statement.operating_income_krw,
-        current_statement.tangible_asset_depreciation_krw,
-        current_statement.intangible_asset_amortization_krw,
-        current_statement.is_financial_industry
-    )
+    # 밸류에이션: 최신 연도·시총 데이터가 있을 때만 계산
+    per = None
+    pbr = None
+    ev_ebitda = None
+    if include_valuation_indicators and stock_price_data is not None:
+        per = calculate_price_to_earnings_ratio(
+            stock_price_data.market_capitalization_krw,
+            current_statement.controlling_interest_net_income_krw
+        )
+        pbr = calculate_price_to_book_ratio(
+            stock_price_data.market_capitalization_krw,
+            current_statement.controlling_interest_equity_krw
+        )
+        ev_ebitda = calculate_enterprise_value_to_ebitda_ratio(
+            stock_price_data.market_capitalization_krw,
+            total_borrowings,
+            current_statement.cash_and_cash_equivalents_krw,
+            current_statement.operating_income_krw,
+            current_statement.tangible_asset_depreciation_krw,
+            current_statement.intangible_asset_amortization_krw,
+            current_statement.is_financial_industry
+        )
     
     return AnnualCalculatedIndicators(
         fiscal_year=fiscal_year,
@@ -753,12 +783,17 @@ def calculate_company_indicators_summary(
     # 최신 연도부터 내림차순 정렬 확인
     financial_statements_sorted = sorted(financial_statements, key=lambda x: x.fiscal_year, reverse=True)
     
-    # 각 연도별 지표 계산
+    # 각 연도별 지표 계산 (밸류에이션은 최신 연도만 — 현재 시총 재사용 왜곡 방지)
     annual_indicators = []
     for i, current_stmt in enumerate(financial_statements_sorted):
         previous_stmt = financial_statements_sorted[i + 1] if i + 1 < len(financial_statements_sorted) else None
         
-        indicators = calculate_annual_indicators(current_stmt, previous_stmt, stock_price_data)
+        indicators = calculate_annual_indicators(
+            current_stmt,
+            previous_stmt,
+            stock_price_data,
+            include_valuation_indicators=(i == 0),
+        )
         annual_indicators.append(indicators)
     
     # 5개년 평균 계산
@@ -774,7 +809,8 @@ def calculate_company_indicators_summary(
         latest_fiscal_year=latest_statement.fiscal_year,
         latest_indicators=latest_indicators,
         historical_five_year_averages=five_year_averages,
-        is_financial_industry=latest_statement.is_financial_industry
+        is_financial_industry=latest_statement.is_financial_industry,
+        annual_indicators_history=annual_indicators,
     )
 
 

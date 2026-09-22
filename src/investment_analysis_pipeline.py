@@ -309,7 +309,7 @@ def run_investment_analysis_pipeline(
     return InvestmentAnalysisPipelineResult(
         stock_code=stock_code,
         company_name=company_name,
-        fiscal_year=fiscal_year,
+        fiscal_year=indicators_summary.latest_fiscal_year,
         financial_statements=financial_statements,
         stock_price_data=stock_price_data,
         industry_benchmark_data=industry_benchmark_data,

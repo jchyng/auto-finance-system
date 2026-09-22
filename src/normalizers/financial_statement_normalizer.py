@@ -64,6 +64,37 @@ ACCOUNT_NAME_MAPPING = {
 }
 
 
+# 표준 계정명 → 우선 탐색할 재무제표 구분(sj_div)
+PREFERRED_STATEMENT_SECTION_BY_ACCOUNT = {
+    "매출액": {"CIS", "IS"},
+    "영업이익": {"CIS", "IS"},
+    "당기순이익": {"CIS", "IS"},
+    "지배기업소유주지분순이익": {"CIS", "IS"},
+    "법인세비용": {"CIS", "IS"},
+    "법인세차감전순이익": {"CIS", "IS"},
+    "이자비용": {"CIS", "IS"},
+    "이자수익": {"CIS", "IS"},
+    "수수료수익": {"CIS", "IS"},
+    "자산총계": {"BS"},
+    "부채총계": {"BS"},
+    "자본총계": {"BS"},
+    "지배기업소유주지분": {"BS"},
+    "유동자산": {"BS"},
+    "유동부채": {"BS"},
+    "비유동자산": {"BS"},
+    "비유동부채": {"BS"},
+    "단기차입금": {"BS"},
+    "유동성장기부채": {"BS"},
+    "장기차입금": {"BS"},
+    "현금및현금성자산": {"BS"},
+    "영업활동현금흐름": {"CF"},
+    "유형자산의취득": {"CF"},
+    "무형자산의취득": {"CF"},
+    "유형자산감가상각비": {"CF", "CIS", "IS"},
+    "무형자산상각비": {"CF", "CIS", "IS"},
+}
+
+
 def find_account_value_by_name(
     accounts_list: List[Dict[str, Any]],
     standard_account_name: str,
@@ -75,7 +106,7 @@ def find_account_value_by_name(
     Args:
         accounts_list: DART 원본 계정과목 리스트
         standard_account_name: 표준 계정명 (예: "매출액")
-        fiscal_year: 사업연도
+        fiscal_year: 사업연도 (다연도 응답 필터용; 계정행에 연도 없으면 전체 탐색)
 
     Returns:
         계정과목 금액(원) 또는 None (없을 시)
@@ -83,13 +114,13 @@ def find_account_value_by_name(
     Note:
         실제 DART 응답은 "법인세비용(수익)", "법인세비용차감전순이익(손실)"처럼
         괄호 설명이 붙는 경우가 있어, 괄호를 제거한 이름도 함께 매칭합니다.
-        또한 같은 계정명이 손익계산서(CIS)·현금흐름표(CF)·자본변동표(SCE)에
-        중복 등장하므로 손익계산서 항목을 우선 선택합니다.
+        BS/CIS/CF 동명 계정 오매칭을 막기 위해 표준 계정별 우선 구분을 사용합니다.
     """
     if standard_account_name not in ACCOUNT_NAME_MAPPING:
         return None
 
     possible_names = ACCOUNT_NAME_MAPPING[standard_account_name]
+    preferred_sections = PREFERRED_STATEMENT_SECTION_BY_ACCOUNT.get(standard_account_name)
 
     def strip_parenthetical_description(account_name: str) -> str:
         while True:
@@ -105,9 +136,21 @@ def find_account_value_by_name(
         except (ValueError, AttributeError, TypeError):
             return None
 
-    # 1차: 손익계산서(CIS) 우선 → 2차: 전체 구분
-    for section_priority in ({"CIS"}, None):
+    def account_matches_fiscal_year(account: Dict[str, Any]) -> bool:
+        account_year = account.get("fiscal_year") or account.get("bsns_year")
+        if account_year is None:
+            return True
+        try:
+            return int(account_year) == int(fiscal_year)
+        except (TypeError, ValueError):
+            return True
+
+    # 1차: 계정 유형에 맞는 재무제표 구분 → 2차: 전체
+    section_passes = (preferred_sections, None) if preferred_sections else (None,)
+    for section_priority in section_passes:
         for account in accounts_list:
+            if not account_matches_fiscal_year(account):
+                continue
             if section_priority is not None and account.get("sj_div") not in section_priority:
                 continue
             account_name = account.get("account_nm", "").strip()
@@ -118,8 +161,6 @@ def find_account_value_by_name(
                 if amount is not None:
                     return amount
 
-    return None
-    
     return None
 
 
@@ -193,72 +234,78 @@ def normalize_dart_financial_statement(
         dart_raw_accounts, "유동부채", fiscal_year
     )
     
-    # 차입금 및 현금
+    # 차입금: 계정 미매칭은 0으로 간주(항목 자체가 없는 공시가 흔함)
     short_term_borrowings_krw = find_account_value_by_name(
         dart_raw_accounts, "단기차입금", fiscal_year
     ) or 0
-    
-    # 장기차입금 = 장기차입금 + 유동성장기부채
+
     long_term_borrowings_krw = (
         find_account_value_by_name(dart_raw_accounts, "장기차입금", fiscal_year) or 0
     ) + (
         find_account_value_by_name(dart_raw_accounts, "유동성장기부채", fiscal_year) or 0
     )
-    
+
     cash_and_cash_equivalents_krw = find_account_value_by_name(
         dart_raw_accounts, "현금및현금성자산", fiscal_year
     ) or 0
-    
-    # 현금흐름 및 감가상각
+
+    # 현금흐름·이자비용: 결측을 0으로 바꾸지 않음 (FCF=0·무차입 오판 방지)
     operating_cash_flow_krw = find_account_value_by_name(
         dart_raw_accounts, "영업활동현금흐름", fiscal_year
-    ) or 0
-    
+    )
     acquisition_of_tangible_assets_krw = find_account_value_by_name(
         dart_raw_accounts, "유형자산의취득", fiscal_year
-    ) or 0
-    
+    )
     acquisition_of_intangible_assets_krw = find_account_value_by_name(
         dart_raw_accounts, "무형자산의취득", fiscal_year
-    ) or 0
-    
+    )
     tangible_asset_depreciation_krw = find_account_value_by_name(
         dart_raw_accounts, "유형자산감가상각비", fiscal_year
     ) or 0
-    
     intangible_asset_amortization_krw = find_account_value_by_name(
         dart_raw_accounts, "무형자산상각비", fiscal_year
     ) or 0
-    
     interest_expense_krw = find_account_value_by_name(
         dart_raw_accounts, "이자비용", fiscal_year
-    ) or 0
-    
+    )
+
     # 필수 항목 검증
     if revenue_krw is None or operating_income_krw is None:
         raise ValueError(
             f"필수 계정과목 누락: 매출액 또는 영업이익이 존재하지 않습니다 "
             f"(종목: {stock_code}, 연도: {fiscal_year})"
         )
-    
+
     if total_assets_krw is None or total_liabilities_krw is None:
         raise ValueError(
             f"필수 계정과목 누락: 자산총계 또는 부채총계가 존재하지 않습니다 "
             f"(종목: {stock_code}, 연도: {fiscal_year})"
         )
-    
+
+    if controlling_interest_net_income_krw is None:
+        raise ValueError(
+            f"필수 계정과목 누락: 지배주주순이익/당기순이익이 존재하지 않습니다 "
+            f"(종목: {stock_code}, 연도: {fiscal_year})"
+        )
+
+    if controlling_interest_equity_krw is None:
+        raise ValueError(
+            f"필수 계정과목 누락: 지배주주자본/자본총계가 존재하지 않습니다 "
+            f"(종목: {stock_code}, 연도: {fiscal_year})"
+        )
+
     return NormalizedFinancialStatement(
         stock_code=stock_code,
         company_name=company_name,
         fiscal_year=fiscal_year,
         revenue_krw=revenue_krw,
         operating_income_krw=operating_income_krw,
-        controlling_interest_net_income_krw=controlling_interest_net_income_krw or 0,
+        controlling_interest_net_income_krw=controlling_interest_net_income_krw,
         income_tax_expense_krw=income_tax_expense_krw or 0,
         profit_before_tax_krw=profit_before_tax_krw or 0,
         total_assets_krw=total_assets_krw,
         total_liabilities_krw=total_liabilities_krw,
-        controlling_interest_equity_krw=controlling_interest_equity_krw or 0,
+        controlling_interest_equity_krw=controlling_interest_equity_krw,
         current_assets_krw=current_assets_krw,
         current_liabilities_krw=current_liabilities_krw,
         short_term_borrowings_krw=short_term_borrowings_krw,
