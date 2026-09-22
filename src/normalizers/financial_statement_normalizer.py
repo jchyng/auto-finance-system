@@ -19,13 +19,17 @@ from src.models.financial_statement_models import NormalizedFinancialStatement
 # DART 계정과목명 매핑 테이블 (다양한 표기를 표준명으로 통일)
 ACCOUNT_NAME_MAPPING = {
     # 손익계산서 항목
-    "매출액": ["매출액", "수익(매출액)", "영업수익"],
+    "매출액": ["매출액", "수익(매출액)", "영업수익",
+             "수익(매출액) 기타 부문", "매출액(상품)", "매출액(용역)"],
     "영업이익": ["영업이익", "영업이익(손실)"],
-    "당기순이익": ["당기순이익", "당기순이익(손실)", "분기순이익"],
+    "당기순이익": ["당기순이익", "당기순이익(손실)", "분기순이익",
+                "연결당기순이익", "계속영업연결당기순이익"],
     "지배기업소유주지분순이익": ["지배기업의 소유주에게 귀속되는 당기순이익", "지배기업 소유주지분 순이익", 
                                    "지배주주순이익", "지배기업소유주지분순이익"],
-    "법인세비용": ["법인세비용", "법인세등"],
-    "법인세차감전순이익": ["법인세비용차감전순이익", "법인세비용차감전계속사업이익", "법인세차감전순이익"],
+    "법인세비용": ["법인세비용", "법인세등", "법인세비용(수익)", "법인세비용(손실)"],
+    "법인세차감전순이익": ["법인세비용차감전순이익", "법인세비용차감전계속사업이익",
+                   "법인세차감전순이익", "법인세비용차감전순이익(손실)",
+                   "법인세비용차감전계속사업이익(손실)"],
     
     # 재무상태표 항목
     "자산총계": ["자산총계", "자산총액"],
@@ -50,9 +54,13 @@ ACCOUNT_NAME_MAPPING = {
     "무형자산의취득": ["무형자산의 취득", "무형자산취득", "무형자산 취득"],
     
     # 감가상각 및 이자비용
-    "유형자산감가상각비": ["유형자산감가상각비", "감가상각비"],
-    "무형자산상각비": ["무형자산상각비", "무형자산 상각비"],
+    "유형자산감가상각비": ["유형자산감가상각비", "감가상각비", "유형자산 감가상각비"],
+    "무형자산상각비": ["무형자산상각비", "무형자산 상각비", "무형자산의 상각비"],
     "이자비용": ["이자비용", "금융비용"],
+
+    # 금융업 대용 수익 (매출액 계정 부재 시 사용)
+    "이자수익": ["이자수익", "이자 및 배당수익(손실)"],
+    "수수료수익": ["수수료수익", "수수료 및 중개수입"],
 }
 
 
@@ -63,33 +71,54 @@ def find_account_value_by_name(
 ) -> Optional[int]:
     """
     계정과목 리스트에서 표준 계정명에 해당하는 값을 찾습니다.
-    
+
     Args:
         accounts_list: DART 원본 계정과목 리스트
         standard_account_name: 표준 계정명 (예: "매출액")
         fiscal_year: 사업연도
-    
+
     Returns:
         계정과목 금액(원) 또는 None (없을 시)
+
+    Note:
+        실제 DART 응답은 "법인세비용(수익)", "법인세비용차감전순이익(손실)"처럼
+        괄호 설명이 붙는 경우가 있어, 괄호를 제거한 이름도 함께 매칭합니다.
+        또한 같은 계정명이 손익계산서(CIS)·현금흐름표(CF)·자본변동표(SCE)에
+        중복 등장하므로 손익계산서 항목을 우선 선택합니다.
     """
     if standard_account_name not in ACCOUNT_NAME_MAPPING:
         return None
-    
+
     possible_names = ACCOUNT_NAME_MAPPING[standard_account_name]
-    
-    for account in accounts_list:
-        account_name = account.get("account_nm", "").strip()
-        
-        # 계정과목명 매칭
-        if account_name in possible_names:
-            # 금액 추출 (단위: 원)
-            amount_str = account.get("thstrm_amount", "0")
-            try:
-                # 쉼표 제거 후 정수 변환
-                amount = int(amount_str.replace(",", ""))
-                return amount
-            except (ValueError, AttributeError):
+
+    def strip_parenthetical_description(account_name: str) -> str:
+        while True:
+            opening_position = account_name.rfind("(")
+            if opening_position == -1:
+                return account_name.strip()
+            account_name = account_name[:opening_position]
+
+    def extract_amount(account: Dict[str, Any]) -> Optional[int]:
+        amount_str = account.get("thstrm_amount", "0")
+        try:
+            return int(str(amount_str).replace(",", ""))
+        except (ValueError, AttributeError, TypeError):
+            return None
+
+    # 1차: 손익계산서(CIS) 우선 → 2차: 전체 구분
+    for section_priority in ({"CIS"}, None):
+        for account in accounts_list:
+            if section_priority is not None and account.get("sj_div") not in section_priority:
                 continue
+            account_name = account.get("account_nm", "").strip()
+            normalized_account_name = strip_parenthetical_description(account_name)
+
+            if account_name in possible_names or normalized_account_name in possible_names:
+                amount = extract_amount(account)
+                if amount is not None:
+                    return amount
+
+    return None
     
     return None
 
@@ -119,6 +148,16 @@ def normalize_dart_financial_statement(
     """
     # 손익계산서 항목 추출
     revenue_krw = find_account_value_by_name(dart_raw_accounts, "매출액", fiscal_year)
+    # 금융업은 "매출액" 계정이 없으므로 이자수익+수수료수익을 대용 수익으로 사용
+    if revenue_krw is None and is_financial_industry:
+        interest_income_krw = find_account_value_by_name(
+            dart_raw_accounts, "이자수익", fiscal_year
+        ) or 0
+        fee_income_krw = find_account_value_by_name(
+            dart_raw_accounts, "수수료수익", fiscal_year
+        ) or 0
+        if interest_income_krw or fee_income_krw:
+            revenue_krw = interest_income_krw + fee_income_krw
     operating_income_krw = find_account_value_by_name(dart_raw_accounts, "영업이익", fiscal_year)
     
     # 지배주주순이익 추출 (없으면 당기순이익 사용)

@@ -26,6 +26,28 @@ DART_CORP_CODE_URL = f"{DART_API_BASE_URL}/corpCode.xml"
 DART_FINANCIAL_STATEMENT_URL = f"{DART_API_BASE_URL}/fnlttSinglAcntAll.json"
 
 
+# DART 기업코드 매핑 (corpCode.xml 실다운로드 실패 시 폴백용 검증값)
+# 종목코드: (DART 기업코드, 기업명, 금융업 여부)
+KNOWN_COMPANY_PROFILES = {
+    "005930": ("00126380", "삼성전자", False),
+    "005380": ("00164742", "현대자동차", False),
+    "055550": ("00382199", "신한지주", True),
+}
+
+
+def get_known_company_profile(stock_code: str) -> tuple:
+    """검증된 종목 프로필(기업코드, 기업명, 금융업 여부)을 반환합니다.
+
+    Args:
+        stock_code: 6자리 종목코드
+
+    Returns:
+        (DART 기업코드, 기업명, 금융업 여부) 튜플 (미등록 시 ("", 종목코드, False))
+    """
+    return KNOWN_COMPANY_PROFILES.get(stock_code, ("", stock_code, False))
+
+
+
 def get_dart_api_key_from_environment() -> Optional[str]:
     """
     환경변수에서 DART API Key를 가져옵니다.
@@ -150,11 +172,9 @@ def fetch_corporation_code_from_dart(stock_code: str, api_key: str) -> Optional[
         print(f"Warning: corpCode.xml 조회 실패, 하드코딩 매핑으로 폴백: {download_error}")
 
     hardcoded_mapping = {
-        "005930": "00126380",  # 삼성전자
-        "005380": "00164779",  # 현대자동차
-        "055550": "00115912",  # 신한지주
+        stock_code: profile[0]
+        for stock_code, profile in KNOWN_COMPANY_PROFILES.items()
     }
-    
     return hardcoded_mapping.get(stock_code)
 
 
@@ -253,6 +273,54 @@ def load_financial_statements_from_fixture(stock_code: str) -> Optional[List[Dic
         return None
 
 
+def convert_dart_raw_statements_to_normalized_statements(
+    stock_code: str,
+    company_name: str,
+    is_financial_industry: bool,
+    raw_statements: list,
+) -> list:
+    """DART API 원본 응답을 표준 정제 재무제표로 변환합니다 (G2(a)).
+
+    Args:
+        stock_code: 6자리 종목코드
+        company_name: 기업명
+        is_financial_industry: 금융업 여부
+        raw_statements: fetch_annual_financial_statements_from_dart_api() 결과
+
+    Returns:
+        연도 내림차순 NormalizedFinancialStatement 리스트
+
+    Note:
+        offline-first 원칙에 따라 변환 실패 연도는 건너뛰고,
+        전부 실패하면 빈 리스트를 반환해 fixture 폴백을 유지합니다.
+    """
+    from src.normalizers.financial_statement_normalizer import (
+        normalize_dart_financial_statement,
+    )
+
+    normalized_statements: list = []
+
+    for raw_statement in raw_statements:
+        fiscal_year = raw_statement.get("fiscal_year")
+        account_rows = raw_statement.get("raw_data", [])
+
+        try:
+            normalized_statement = normalize_dart_financial_statement(
+                stock_code=stock_code,
+                company_name=company_name,
+                fiscal_year=fiscal_year,
+                dart_raw_accounts=account_rows,
+                is_financial_industry=is_financial_industry,
+            )
+            normalized_statements.append(normalized_statement)
+        except Exception as normalize_error:
+            print(f"Warning: {fiscal_year}년 정제 실패, 건너뜀: {normalize_error}")
+            continue
+
+    normalized_statements.sort(key=lambda item: item.fiscal_year, reverse=True)
+    return normalized_statements
+
+
 def collect_normalized_financial_statements(
     stock_code: str,
     fiscal_year: int = 2023,
@@ -292,8 +360,20 @@ def collect_normalized_financial_statements(
                 
                 if raw_statements:
                     print(f"Success: DART API로부터 {len(raw_statements)}개 연도 재무제표 수집 완료")
-                    # TODO: 원본 DART 응답을 NormalizedFinancialStatement로 변환하는 normalizer 연동
-                    # 현재는 fixture를 사용하여 검증
+                    _, live_company_name, live_is_financial = get_known_company_profile(
+                        stock_code
+                    )
+                    normalized_live_statements = (
+                        convert_dart_raw_statements_to_normalized_statements(
+                            stock_code=stock_code,
+                            company_name=live_company_name,
+                            is_financial_industry=live_is_financial,
+                            raw_statements=raw_statements,
+                        )
+                    )
+                    if normalized_live_statements:
+                        return normalized_live_statements
+                    print("Warning: DART API 원본 정제 결과가 비어 fixture 폴백을 시도합니다")
             except Exception as error:
                 print(f"Warning: DART API 호출 중 오류 발생: {error}")
     
