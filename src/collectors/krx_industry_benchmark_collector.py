@@ -9,7 +9,7 @@ pykrx 라이브러리를 통해 KRX 업종 평균 지표를 수집합니다.
 
 import argparse
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -292,8 +292,9 @@ def aggregate_industry_benchmark_from_company_ratios(
 
 def get_latest_trading_date_string_from_stock_collector() -> str:
     """주가 수집기와 동일한 규칙으로 최근 거래일 문자열을 반환합니다."""
-    base_date = datetime.now() - timedelta(days=10)
-    return base_date.strftime("%Y%m%d")
+    from src.collectors.krx_stock_price_collector import get_latest_trading_date_string
+
+    return get_latest_trading_date_string()
 
 
 def fetch_industry_benchmark_from_krx(

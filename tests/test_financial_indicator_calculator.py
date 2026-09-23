@@ -4,6 +4,7 @@
 
 import json
 import pytest
+from dataclasses import replace
 from pathlib import Path
 
 from src.engines.financial_indicator_calculator import (
@@ -23,6 +24,7 @@ from src.engines.financial_indicator_calculator import (
     calculate_price_to_book_ratio,
     calculate_enterprise_value_to_ebitda_ratio,
     calculate_company_indicators_summary,
+    calculate_annual_indicators,
 )
 from src.models.financial_statement_models import (
     NormalizedFinancialStatement,
@@ -105,6 +107,45 @@ def test_calculate_fcf_growth_rate():
     
     # 이전 FCF가 0 (None 반환)
     assert calculate_fcf_growth_rate(10000000000, 0) is None
+
+
+def test_calculate_eps_growth_rate_uses_different_adjusted_share_counts():
+    """증자·감자 등으로 당기/전기 수정주식수가 달라도 EPS를 정확히 계산합니다."""
+    growth = calculate_eps_growth_rate(
+        current_net_income=120,
+        previous_net_income=100,
+        current_shares=12,
+        previous_shares=10,
+    )
+    assert growth == 0.0
+
+
+def test_annual_indicators_prefer_statement_adjusted_shares():
+    """연도별 수정주식수가 있으면 현재 KRX 주식수보다 우선합니다."""
+    fixture_path = Path(__file__).parent.parent / "data" / "fixtures" / "005930_samsung_electronics_dart_financials.json"
+    with open(fixture_path, "r", encoding="utf-8") as file:
+        statements = [
+            NormalizedFinancialStatement.from_dictionary(statement)
+            for statement in json.load(file)["annual_financial_statements"]
+        ]
+
+    current = replace(statements[0], adjusted_basic_shares_outstanding=12)
+    previous = replace(statements[1], adjusted_basic_shares_outstanding=10)
+    price_data = StockPriceAndMarketCapData.from_dictionary(
+        {"stock_code": "005930", "company_name": "삼성전자",
+         "closing_price_krw": 72000, "market_capitalization_krw": 1,
+         "total_shares_outstanding": 1, "base_trading_date": "2024-03-29",
+         "data_source_name": "test"}
+    )
+
+    indicators = calculate_annual_indicators(current, previous, price_data)
+    expected = calculate_eps_growth_rate(
+        current.controlling_interest_net_income_krw,
+        previous.controlling_interest_net_income_krw,
+        12,
+        10,
+    )
+    assert indicators.earnings_per_share_growth_rate_percentage == expected
 
 
 # ============================================================================

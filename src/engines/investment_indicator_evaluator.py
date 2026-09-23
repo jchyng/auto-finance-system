@@ -59,17 +59,17 @@ def evaluate_revenue_growth_rate(
         if current_value >= five_year_average and current_value >= industry_average:
             return (
                 IndicatorEvaluationStatus.GOOD,
-                f"당기 성장률({current_value}%)이 기업의 5년 평균({five_year_average}%) 및 업종 평균({industry_average}%) 이상입니다."
+                f"당기 성장률({current_value}%)이 기업의 과거 평균({five_year_average}%) 및 업종 평균({industry_average}%) 이상입니다."
             )
         elif current_value < five_year_average * 0.8 and current_value < industry_average * 0.8:
             return (
                 IndicatorEvaluationStatus.CAUTION,
-                f"당기 성장률({current_value}%)이 기업의 5년 평균({five_year_average}%)과 업종 평균({industry_average}%) 대비 20% 이상 낮습니다."
+                f"당기 성장률({current_value}%)이 기업의 과거 평균({five_year_average}%)과 업종 평균({industry_average}%) 대비 20% 이상 낮습니다."
             )
         else:
             return (
                 IndicatorEvaluationStatus.NORMAL,
-                f"당기 성장률({current_value}%)이 5년 평균 및 업종 평균 수준에 근접합니다."
+                f"당기 성장률({current_value}%)이 과거 평균 및 업종 평균 수준에 근접합니다."
             )
     
     # 5년 평균만 있는 경우
@@ -77,24 +77,24 @@ def evaluate_revenue_growth_rate(
         if current_value >= five_year_average:
             return (
                 IndicatorEvaluationStatus.GOOD,
-                f"당기 성장률({current_value}%)이 기업의 5년 평균({five_year_average}%) 이상입니다."
+                f"당기 성장률({current_value}%)이 기업의 과거 평균({five_year_average}%) 이상입니다."
             )
         elif current_value < five_year_average * 0.8:
             return (
                 IndicatorEvaluationStatus.CAUTION,
-                f"당기 성장률({current_value}%)이 5년 평균({five_year_average}%) 대비 20% 이상 낮습니다."
+                f"당기 성장률({current_value}%)이 과거 평균({five_year_average}%) 대비 20% 이상 낮습니다."
             )
         else:
             return (
                 IndicatorEvaluationStatus.NORMAL,
-                f"당기 성장률({current_value}%)이 5년 평균 수준에 근접합니다."
+                f"당기 성장률({current_value}%)이 과거 평균 수준에 근접합니다."
             )
     
     # 비교 기준이 없는 경우
     else:
         return (
             IndicatorEvaluationStatus.NOT_APPLICABLE,
-            f"당기 성장률은 {current_value}%이나, 비교 기준(5년 평균, 업종 평균)이 없어 판정이 어렵습니다."
+            f"당기 성장률은 {current_value}%이나, 비교 기준(과거 평균, 업종 평균)이 없어 판정이 어렵습니다."
         )
 
 
@@ -542,6 +542,27 @@ def format_optional_value_int(value: Optional[int]) -> str:
         return f"{value:,}원"
 
 
+def calculate_prior_period_average_excluding_latest(
+    annual_indicators_history: List[AnnualCalculatedIndicators],
+    attribute_name: str,
+) -> Optional[float]:
+    """
+    최신 연도를 제외한 과거 연도 평균을 계산합니다.
+
+    성장/수익성 판정에서 당기 값이 5년 평균에 포함되어 자기비교가 되는 편향을 막습니다.
+    표시용 5년 평균과는 별도로, 판정 벤치마크에만 사용합니다.
+    """
+    prior_years = annual_indicators_history[1:] if len(annual_indicators_history) > 1 else []
+    valid_values = []
+    for annual in prior_years:
+        value = getattr(annual, attribute_name, None)
+        if value is not None:
+            valid_values.append(float(value))
+    if not valid_values:
+        return None
+    return round(sum(valid_values) / len(valid_values), 1)
+
+
 def create_single_indicator_evaluation(
     category: IndicatorCategory,
     name_korean: str,
@@ -602,6 +623,46 @@ def evaluate_all_indicators(
         if indicators_summary.annual_indicators_history
         else [latest]
     )
+
+    # 판정용 벤치마크: 당기 제외 평균 (자기비교 편향 방지). 표시는 기존 5년 평균 유지.
+    def prior_average(attribute_name: str, fallback: Optional[float]) -> Optional[float]:
+        computed = calculate_prior_period_average_excluding_latest(
+            historical_list, attribute_name
+        )
+        return computed if computed is not None else fallback
+
+    prior_revenue_growth = prior_average(
+        "revenue_growth_rate_percentage",
+        averages.average_revenue_growth_rate_percentage,
+    )
+    prior_operating_income_growth = prior_average(
+        "operating_income_growth_rate_percentage",
+        averages.average_operating_income_growth_rate_percentage,
+    )
+    prior_eps_growth = prior_average(
+        "earnings_per_share_growth_rate_percentage",
+        averages.average_earnings_per_share_growth_rate_percentage,
+    )
+    prior_fcf_growth = prior_average(
+        "free_cash_flow_growth_rate_percentage",
+        averages.average_free_cash_flow_growth_rate_percentage,
+    )
+    prior_operating_margin = prior_average(
+        "operating_profit_margin_percentage",
+        averages.average_operating_profit_margin_percentage,
+    )
+    prior_roe = prior_average(
+        "return_on_equity_percentage",
+        averages.average_return_on_equity_percentage,
+    )
+    prior_roa = prior_average(
+        "return_on_assets_percentage",
+        averages.average_return_on_assets_percentage,
+    )
+    prior_roic = prior_average(
+        "return_on_invested_capital_percentage",
+        averages.average_return_on_invested_capital_percentage,
+    )
     
     evaluations = []
     
@@ -610,7 +671,7 @@ def evaluate_all_indicators(
     # 1-1. 매출액 성장률
     status, reason = evaluate_revenue_growth_rate(
         latest.revenue_growth_rate_percentage,
-        averages.average_revenue_growth_rate_percentage,
+        prior_revenue_growth,
         None  # 업종 평균 미제공
     )
     evaluations.append(create_single_indicator_evaluation(
@@ -618,7 +679,7 @@ def evaluate_all_indicators(
         name_korean="매출액 성장률",
         name_english="Revenue Growth Rate (YoY)",
         current_value=format_optional_value(latest.revenue_growth_rate_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_revenue_growth_rate_percentage, "%"),
+        five_year_average=format_optional_value(prior_revenue_growth, "%"),
         industry_benchmark="업종 데이터 없음",
         status=status,
         reason=reason,
@@ -630,7 +691,7 @@ def evaluate_all_indicators(
     status, reason = evaluate_operating_income_growth_rate(
         latest.operating_income_growth_rate_percentage,
         latest.operating_income_turnaround_status_note,
-        averages.average_operating_income_growth_rate_percentage,
+        prior_operating_income_growth,
         None
     )
     evaluations.append(create_single_indicator_evaluation(
@@ -638,7 +699,7 @@ def evaluate_all_indicators(
         name_korean="영업이익 성장률",
         name_english="Operating Income Growth Rate (YoY)",
         current_value=format_optional_value(latest.operating_income_growth_rate_percentage, "%") if not latest.operating_income_turnaround_status_note else latest.operating_income_turnaround_status_note,
-        five_year_average=format_optional_value(averages.average_operating_income_growth_rate_percentage, "%"),
+        five_year_average=format_optional_value(prior_operating_income_growth, "%"),
         industry_benchmark="업종 데이터 없음",
         status=status,
         reason=reason,
@@ -649,7 +710,7 @@ def evaluate_all_indicators(
     # 1-3. EPS 성장률
     status, reason = evaluate_revenue_growth_rate(
         latest.earnings_per_share_growth_rate_percentage,
-        averages.average_earnings_per_share_growth_rate_percentage,
+        prior_eps_growth,
         None
     )
     evaluations.append(create_single_indicator_evaluation(
@@ -657,7 +718,7 @@ def evaluate_all_indicators(
         name_korean="EPS 성장률",
         name_english="EPS Growth Rate (YoY)",
         current_value=format_optional_value(latest.earnings_per_share_growth_rate_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_earnings_per_share_growth_rate_percentage, "%"),
+        five_year_average=format_optional_value(prior_eps_growth, "%"),
         industry_benchmark="업종 데이터 없음",
         status=status,
         reason=reason,
@@ -668,7 +729,7 @@ def evaluate_all_indicators(
     # 1-4. FCF 성장률
     status, reason = evaluate_revenue_growth_rate(
         latest.free_cash_flow_growth_rate_percentage,
-        averages.average_free_cash_flow_growth_rate_percentage,
+        prior_fcf_growth,
         None
     )
     evaluations.append(create_single_indicator_evaluation(
@@ -676,7 +737,7 @@ def evaluate_all_indicators(
         name_korean="FCF 성장률",
         name_english="Free Cash Flow Growth Rate (YoY)",
         current_value=format_optional_value(latest.free_cash_flow_growth_rate_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_free_cash_flow_growth_rate_percentage, "%"),
+        five_year_average=format_optional_value(prior_fcf_growth, "%"),
         industry_benchmark="업종 데이터 없음",
         status=status,
         reason=reason,
@@ -690,7 +751,7 @@ def evaluate_all_indicators(
     status, reason = evaluate_profitability_ratio(
         "영업이익률",
         latest.operating_profit_margin_percentage,
-        averages.average_operating_profit_margin_percentage,
+        prior_operating_margin,
         industry_benchmark.average_operating_profit_margin_percentage if industry_benchmark else None,
         "%"
     )
@@ -699,7 +760,7 @@ def evaluate_all_indicators(
         name_korean="영업이익률",
         name_english="Operating Profit Margin",
         current_value=format_optional_value(latest.operating_profit_margin_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_operating_profit_margin_percentage, "%"),
+        five_year_average=format_optional_value(prior_operating_margin, "%"),
         industry_benchmark=format_optional_value(industry_benchmark.average_operating_profit_margin_percentage, "%") if industry_benchmark else "업종 데이터 없음",
         status=status,
         reason=reason,
@@ -711,7 +772,7 @@ def evaluate_all_indicators(
     status, reason = evaluate_profitability_ratio(
         "ROE",
         latest.return_on_equity_percentage,
-        averages.average_return_on_equity_percentage,
+        prior_roe,
         industry_benchmark.average_return_on_equity_percentage if industry_benchmark else None,
         "%"
     )
@@ -720,7 +781,7 @@ def evaluate_all_indicators(
         name_korean="ROE",
         name_english="Return on Equity",
         current_value=format_optional_value(latest.return_on_equity_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_return_on_equity_percentage, "%"),
+        five_year_average=format_optional_value(prior_roe, "%"),
         industry_benchmark=format_optional_value(industry_benchmark.average_return_on_equity_percentage, "%") if industry_benchmark else "업종 데이터 없음",
         status=status,
         reason=reason,
@@ -732,7 +793,7 @@ def evaluate_all_indicators(
     status, reason = evaluate_profitability_ratio(
         "ROA",
         latest.return_on_assets_percentage,
-        averages.average_return_on_assets_percentage,
+        prior_roa,
         None,  # 업종 평균 미제공
         "%"
     )
@@ -741,7 +802,7 @@ def evaluate_all_indicators(
         name_korean="ROA",
         name_english="Return on Assets",
         current_value=format_optional_value(latest.return_on_assets_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_return_on_assets_percentage, "%"),
+        five_year_average=format_optional_value(prior_roa, "%"),
         industry_benchmark="업종 데이터 없음",
         status=status,
         reason=reason,
@@ -757,7 +818,7 @@ def evaluate_all_indicators(
         status, reason = evaluate_profitability_ratio(
             "ROIC",
             latest.return_on_invested_capital_percentage,
-            averages.average_return_on_invested_capital_percentage,
+            prior_roic,
             None,  # 업종 평균 미제공
             "%"
         )
@@ -766,7 +827,7 @@ def evaluate_all_indicators(
         name_korean="ROIC",
         name_english="Return on Invested Capital",
         current_value=format_optional_value(latest.return_on_invested_capital_percentage, "%"),
-        five_year_average=format_optional_value(averages.average_return_on_invested_capital_percentage, "%"),
+        five_year_average=format_optional_value(prior_roic, "%"),
         industry_benchmark="업종 데이터 없음",
         status=status,
         reason=reason,

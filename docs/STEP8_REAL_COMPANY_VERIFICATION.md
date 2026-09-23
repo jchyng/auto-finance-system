@@ -1,8 +1,8 @@
 # Step 8. 실제 기업 3종 종합 검증 결과 보고서
 
 > **Real Company Cross-Verification Report (Step 8)**
-> 검증일: 2026-09-22
-> 검증 환경: Windows / Python 3.13.14 (`.venv`) / fixture 폴백 모드 (`DART_API_KEY` 미설정)
+> 검증일: 2026-09-23
+> 검증 환경: Windows / Python 3.13.14 (`.venv`) / DART·KRX 실 API 종단 검증
 
 ---
 
@@ -135,7 +135,7 @@ python -m pytest tests/ -q
 
 * **영향**: 부채비율·유동비율·이자보상배율·ROE 등 재무건전성 판정 결과가 실제 공시값 기준과 달라질 수 있습니다.
 * **제안(택 1)**
-  * (a) `DART_API_KEY` 확보 후 5개년 실제 재무제표를 수집하여 fixture 재생성 → Step 8 재검증 (미실행: 키 미확보. 키 확보 후 별도 단계에서 수행)
+  * (a) `DART_API_KEY` 확보 후 5개년 실제 재무제표를 수집하여 fixture 재생성 → Step 8 재검증 (DART 수집은 실행 완료; 신한지주 5개년·일부 세부 계정 보강 전이라 fixture 반영은 보류)
   * (b) **[적용]** fixture를 "공시 기반 **샘플/근사** 데이터"로 재라벨링하고, Step 8 합격 기준을 "지표 계산 정합성 + 원칙 준수"로 한정 (`PROJECT_RULES.md`, `SYSTEM_SPECIFICATION.md` 반영)
 
 ### G3. 분석 요약문의 상태 개수 누락 **[완료]**
@@ -146,10 +146,10 @@ python -m pytest tests/ -q
 
 ### G4. 실 API 경로 미검증 (오프라인 fixture 전용 검증) **[부분 완료: 뼈대 구현]**
 
-* `dart_financial_statement_collector`: `corpCode.xml` 다운로드·파싱 뼈대 구현 후 검증된 하드코딩 매핑으로 폴백 (단위 테스트 포함, 실 API 키 없이 오프라인 검증 유지)
+* `dart_financial_statement_collector`: `corpCode.xml` 다운로드·파싱 및 3사 DART 실수집 검증 완료 (삼성전자·현대차 5개년, 신한지주 2023년 1개년)
 * `krx_industry_benchmark_collector`: pykrx 개별 종목 PER/PBR 집계 뼈대 구현 후 `None` 시 fixture 폴백 유지 (단위 테스트 포함)
 * 마이너 불일치 해소: 하드코딩 업종명을 fixture와 동일한 `"은행/금융지주"`로 통일
-* **영향**: 실 API 키·네트워크가 없어 온라인 종단 검증은 별도 단계가 필요하며, 현재 검증 범위는 "오프라인 fixture + 실 API 뼈대 단위 테스트"입니다.
+* **조치 결과**: `.env`의 `KRX_ID`·`KRX_PW`를 사용해 KRX 로그인에 성공했고, 3사 주가·시가총액·업종 분류·업종 벤치마크를 실수집했습니다. 3사 `--no-fixture` 전체 파이프라인도 정상 완료했습니다.
 
 ### G5. 문서-코드 명칭 불일치 **[완료]**
 
@@ -180,7 +180,7 @@ python -m pytest tests/ -q
 
 > **결론: Step 8은 "통과"입니다 (범위: 공시 기반 샘플/근사 fixture 기준).**
 > 시스템이 fixture 데이터로부터 지표를 정확·결정론적으로 산출하고 모든 원칙을 준수함은 3개 기업에 대해 검증되었습니다.
-> G1/G3/G5는 완료, G2는 (b)안 재라벨링 완료, G4는 실 API 뼈대 구현 + 오프라인 폴백 유지 상태입니다. `DART_API_KEY` 확보 후 실데이터 수집(G2(a))과 온라인 종단 검증(G4 잔여)은 별도 단계로 수행합니다.
+> G1/G3/G5는 완료, G2(a) DART 실수집은 완료(신한지주 API 제공 범위는 2023년 1개년), G2 fixture 재생성은 보류, G4 온라인 종단 검증은 완료했습니다.
 
 ---
 
@@ -199,7 +199,9 @@ python -m pytest tests/ -q
 | 항목 | 결과 |
 | :--- | :--- |
 | Step 8 전용 교차검증 테스트 | `tests/test_step8_real_company_verification.py` — **15 passed** |
-| 기존 회귀 테스트 (Step 1~7) | **100 passed** (총 115 passed, 0 failed) |
-| 3사 CLI 실행 | 005930 / 005380 / 055550 모두 정상 종료, 리포트·중간 JSON 생성 |
-| 리포트 산출물 | `reports/{005930,005380,055550}_investment_analysis_report.txt` |
-| 중간 산출물 | `data/processed`, `data/metrics`, `data/evaluation`, `data/raw` |
+| 전체 회귀 테스트 | **125 passed**, 0 failed |
+| fixture 3사 CLI 실행 | 005930 / 005380 / 055550 정상 종료, JSON 리포트·중간 산출물 생성 |
+| DART 실 API 수집 | 005930·005380 5개년, 055550 2023년 1개년 |
+| KRX 실 API 수집 | 3사 주가·시가총액·업종 분류·업종 벤치마크 수집 성공 |
+| `--no-fixture` 종단 실행 | 005930·005380·055550 모두 정상 종료, 15개 평가 지표 생성 |
+| 리포트 산출물 | `reports/{005930,005380,055550}_env_real_attempt.json` |

@@ -144,6 +144,32 @@ def parse_corporation_code_mapping_from_corp_code_xml(
     return stock_to_corporation_mapping
 
 
+def redact_dart_api_key_from_text(message: str, api_key: str) -> str:
+    """로그/예외 메시지에서 DART API 키를 마스킹합니다."""
+    if not api_key or not message:
+        return message
+    return message.replace(api_key, "***REDACTED***")
+
+
+def build_dart_api_request(
+    endpoint_url: str,
+    query_parameters: Dict[str, str],
+) -> urllib.request.Request:
+    """
+    DART Open API 요청 객체를 생성합니다.
+
+    Note:
+        DART Open API는 crtfc_key를 쿼리 파라미터로만 받습니다.
+        URL을 print하지 않도록 Request 객체만 반환합니다.
+    """
+    encoded_query = urllib.parse.urlencode(query_parameters)
+    return urllib.request.Request(
+        url=f"{endpoint_url}?{encoded_query}",
+        method="GET",
+        headers={"User-Agent": "investment-analysis-pipeline/1.0"},
+    )
+
+
 def download_corp_code_xml_bytes_from_dart(api_key: str) -> bytes:
     """DART corpCode.xml ZIP을 다운로드해 해제된 XML 바이트를 반환합니다 (G4).
 
@@ -159,13 +185,17 @@ def download_corp_code_xml_bytes_from_dart(api_key: str) -> bytes:
     import io
     import zipfile
 
-    download_url = f"{DART_CORP_CODE_URL}?crtfc_key={urllib.parse.quote(api_key)}"
+    request = build_dart_api_request(
+        DART_CORP_CODE_URL,
+        {"crtfc_key": api_key},
+    )
 
     try:
-        with urllib.request.urlopen(download_url, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             zipped_bytes = response.read()
     except Exception as download_error:
-        raise RuntimeError(f"DART corpCode.xml 다운로드 실패: {download_error}")
+        safe_message = redact_dart_api_key_from_text(str(download_error), api_key)
+        raise RuntimeError(f"DART corpCode.xml 다운로드 실패: {safe_message}")
 
     try:
         with zipfile.ZipFile(io.BytesIO(zipped_bytes)) as zip_archive:
@@ -247,13 +277,13 @@ def fetch_annual_financial_statements_from_dart_api(
             "reprt_code": "11011",  # 사업보고서 코드
             "fs_div": "CFS"         # 연결재무제표 (개별: OFS)
         }
-        
-        url = f"{DART_FINANCIAL_STATEMENT_URL}?{urllib.parse.urlencode(params)}"
-        
+
+        request = build_dart_api_request(DART_FINANCIAL_STATEMENT_URL, params)
+
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=10) as response:
                 response_data = json.loads(response.read().decode("utf-8"))
-                
+
                 if response_data.get("status") == "000":
                     collected_statements.append({
                         "fiscal_year": target_year,
@@ -262,11 +292,13 @@ def fetch_annual_financial_statements_from_dart_api(
                 else:
                     error_message = response_data.get("message", "Unknown error")
                     print(f"Warning: DART API 호출 실패 (연도 {target_year}): {error_message}")
-        
+
         except urllib.error.URLError as url_error:
-            print(f"Warning: DART API 네트워크 오류 (연도 {target_year}): {url_error}")
+            safe_message = redact_dart_api_key_from_text(str(url_error), api_key)
+            print(f"Warning: DART API 네트워크 오류 (연도 {target_year}): {safe_message}")
         except Exception as general_error:
-            print(f"Warning: DART API 처리 중 오류 (연도 {target_year}): {general_error}")
+            safe_message = redact_dart_api_key_from_text(str(general_error), api_key)
+            print(f"Warning: DART API 처리 중 오류 (연도 {target_year}): {safe_message}")
     
     return collected_statements
 

@@ -545,8 +545,16 @@ def calculate_annual_indicators(
     eps_growth = None
     fcf_growth = None
     
-    shares_outstanding = (
+    fallback_shares = (
         stock_price_data.total_shares_outstanding if stock_price_data else 0
+    )
+    current_shares = (
+        current_statement.adjusted_basic_shares_outstanding or fallback_shares
+    )
+    previous_shares = (
+        previous_statement.adjusted_basic_shares_outstanding
+        if previous_statement and previous_statement.adjusted_basic_shares_outstanding
+        else fallback_shares
     )
 
     if previous_statement:
@@ -560,12 +568,12 @@ def calculate_annual_indicators(
             previous_statement.operating_income_krw
         )
         
-        if shares_outstanding > 0:
+        if current_shares > 0 and previous_shares > 0:
             eps_growth = calculate_eps_growth_rate(
                 current_statement.controlling_interest_net_income_krw,
                 previous_statement.controlling_interest_net_income_krw,
-                shares_outstanding,
-                shares_outstanding  # 연도별 수정주식수 부재 시 동일 주식수 사용
+                current_shares,
+                previous_shares,
             )
         
         previous_fcf = calculate_free_cash_flow(

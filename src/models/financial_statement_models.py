@@ -49,6 +49,7 @@ class NormalizedFinancialStatement:
     # 메타데이터
     is_financial_industry: bool                            # 금융업종 여부 (은행/증권/보험 등)
     data_source_name: str                                  # 데이터 출처 (예: "DART 전자공시")
+    adjusted_basic_shares_outstanding: Optional[int] = None # 수정기본EPS 역산 주식수
 
     def to_dictionary(self) -> Dict[str, Any]:
         """데이터 클래스를 딕셔너리로 변환합니다."""

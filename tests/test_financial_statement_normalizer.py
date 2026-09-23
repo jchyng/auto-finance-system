@@ -10,9 +10,20 @@ from src.normalizers.financial_statement_normalizer import (
     normalize_dart_financial_statement,
     normalize_multiple_years_from_dart_response,
     find_account_value_by_name,
+    find_basic_eps_value,
     ACCOUNT_NAME_MAPPING,
 )
 from src.models.financial_statement_models import NormalizedFinancialStatement
+
+
+def test_find_basic_eps_value():
+    accounts = [{
+        "sj_div": "CIS",
+        "account_nm": "기본주당이익",
+        "thstrm_amount": "1,250",
+        "fiscal_year": 2023,
+    }]
+    assert find_basic_eps_value(accounts, 2023) == 1250.0
 
 
 def test_account_name_mapping_coverage():
@@ -54,6 +65,7 @@ def test_normalize_dart_financial_statement_basic():
         {"account_nm": "매출액", "thstrm_amount": "258935494000000"},
         {"account_nm": "영업이익", "thstrm_amount": "6566976000000"},
         {"account_nm": "지배기업의 소유주에게 귀속되는 당기순이익", "thstrm_amount": "14472674000000"},
+        {"sj_div": "CIS", "account_nm": "기본주당이익", "thstrm_amount": "10000"},
         {"account_nm": "법인세비용", "thstrm_amount": "4504859000000"},
         {"account_nm": "자산총계", "thstrm_amount": "455905984000000"},
         {"account_nm": "부채총계", "thstrm_amount": "92228145000000"},
@@ -80,6 +92,7 @@ def test_normalize_dart_financial_statement_basic():
     assert result.revenue_krw == 258935494000000
     assert result.operating_income_krw == 6566976000000
     assert result.controlling_interest_net_income_krw == 14472674000000
+    assert result.adjusted_basic_shares_outstanding == 1447267400
     assert result.total_assets_krw == 455905984000000
     assert result.total_liabilities_krw == 92228145000000
     assert result.controlling_interest_equity_krw == 354709566000000

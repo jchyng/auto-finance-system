@@ -26,95 +26,121 @@ from src.models.financial_statement_models import StockPriceAndMarketCapData
 def get_latest_trading_date_string(target_date: Optional[str] = None) -> str:
     """
     최근 거래일 날짜 문자열을 반환합니다 (YYYYMMDD 형식).
-    
+
     Args:
-        target_date: 기준 날짜 (YYYYMMDD). None이면 오늘 날짜 기준
-    
+        target_date: 기준 날짜 (YYYYMMDD). None이면 오늘부터 역탐색
+
     Returns:
         YYYYMMDD 형식 날짜 문자열
-    
+
     Note:
-        실제 거래소 휴장일 처리는 pykrx가 자동으로 처리하므로 
-        간소화를 위해 최근 10일 이내 날짜를 반환
+        pykrx의 최근 영업일 헬퍼를 우선 사용하고, 실패 시 오늘부터
+        최대 14일 전까지 거슬러 올라가며 후보일을 반환합니다.
+        (실제 데이터 유무는 fetch 단계에서 확인)
     """
     if target_date:
         return target_date
-    
-    # 최근 10일 이내 날짜 사용 (주말/공휴일 대비)
-    base_date = datetime.now() - timedelta(days=10)
-    return base_date.strftime("%Y%m%d")
+
+    if PYKRX_AVAILABLE:
+        try:
+            nearest = pykrx_stock.get_nearest_business_day_in_a_week()
+            if nearest:
+                return str(nearest).replace("-", "")[:8]
+        except Exception:
+            pass
+
+    return datetime.now().strftime("%Y%m%d")
 
 
 def fetch_stock_price_from_krx(
     stock_code: str,
-    trading_date: Optional[str] = None
+    trading_date: Optional[str] = None,
+    maximum_lookback_calendar_days: int = 14,
 ) -> Optional[StockPriceAndMarketCapData]:
     """
     pykrx를 통해 KRX에서 주가 및 시가총액 데이터를 수집합니다.
-    
+
     Args:
         stock_code: 6자리 종목코드 (예: "005930")
-        trading_date: 기준 거래일 (YYYYMMDD 형식, None이면 최근 거래일)
-    
+        trading_date: 기준 거래일 (YYYYMMDD 형식, None이면 최근 거래일 역탐색)
+        maximum_lookback_calendar_days: 데이터 없을 때 거슬러 볼 최대 일수
+
     Returns:
         StockPriceAndMarketCapData 모델 또는 None (수집 실패 시)
     """
     if not PYKRX_AVAILABLE:
         print("Error: pykrx 라이브러리가 설치되지 않았습니다.")
         return None
-    
+
     try:
-        date_string = trading_date or get_latest_trading_date_string()
-        
-        # pykrx로 시가총액 정보 조회
-        market_cap_df = pykrx_stock.get_market_cap_by_date(
-            fromdate=date_string,
-            todate=date_string,
-            ticker=stock_code
-        )
-        
-        if market_cap_df.empty:
-            print(f"Warning: {stock_code}의 {date_string} 시가총액 데이터가 없습니다.")
-            return None
-        
-        # 종가 조회
-        price_df = pykrx_stock.get_market_ohlcv_by_date(
-            fromdate=date_string,
-            todate=date_string,
-            ticker=stock_code
-        )
-        
-        if price_df.empty:
-            print(f"Warning: {stock_code}의 {date_string} 주가 데이터가 없습니다.")
-            return None
-        
-        # 종목명 조회
-        try:
-            company_name = pykrx_stock.get_market_ticker_name(stock_code)
-        except:
-            company_name = "종목명 조회 실패"
-        
-        # 데이터 추출
-        market_cap_row = market_cap_df.iloc[0]
-        price_row = price_df.iloc[0]
-        
-        closing_price = int(price_row['종가'])
-        market_capitalization = int(market_cap_row['시가총액'])
-        total_shares = int(market_cap_row['상장주식수'])
-        
-        # 날짜 형식 변환 (YYYYMMDD → YYYY-MM-DD)
-        formatted_date = f"{date_string[:4]}-{date_string[4:6]}-{date_string[6:8]}"
-        
-        return StockPriceAndMarketCapData(
-            stock_code=stock_code,
-            company_name=company_name,
-            closing_price_krw=closing_price,
-            market_capitalization_krw=market_capitalization,
-            total_shares_outstanding=total_shares,
-            base_trading_date=formatted_date,
-            data_source_name="KRX 정보데이터시스템"
-        )
-    
+        if trading_date:
+            candidate_dates = [trading_date]
+        else:
+            start_date = datetime.strptime(
+                get_latest_trading_date_string(), "%Y%m%d"
+            )
+            candidate_dates = [
+                (start_date - timedelta(days=offset)).strftime("%Y%m%d")
+                for offset in range(maximum_lookback_calendar_days + 1)
+            ]
+
+        last_error_message = None
+        for date_string in candidate_dates:
+            try:
+                market_cap_df = pykrx_stock.get_market_cap_by_date(
+                    fromdate=date_string,
+                    todate=date_string,
+                    ticker=stock_code,
+                )
+                if market_cap_df is None or market_cap_df.empty:
+                    continue
+
+                price_df = pykrx_stock.get_market_ohlcv_by_date(
+                    fromdate=date_string,
+                    todate=date_string,
+                    ticker=stock_code,
+                )
+                if price_df is None or price_df.empty:
+                    continue
+
+                try:
+                    company_name = pykrx_stock.get_market_ticker_name(stock_code)
+                except Exception:
+                    company_name = "종목명 조회 실패"
+
+                market_cap_row = market_cap_df.iloc[-1]
+                price_row = price_df.iloc[-1]
+
+                closing_price = int(price_row["종가"])
+                market_capitalization = int(market_cap_row["시가총액"])
+                total_shares = int(market_cap_row["상장주식수"])
+                formatted_date = f"{date_string[:4]}-{date_string[4:6]}-{date_string[6:8]}"
+
+                return StockPriceAndMarketCapData(
+                    stock_code=stock_code,
+                    company_name=company_name,
+                    closing_price_krw=closing_price,
+                    market_capitalization_krw=market_capitalization,
+                    total_shares_outstanding=total_shares,
+                    base_trading_date=formatted_date,
+                    data_source_name="KRX 정보데이터시스템",
+                )
+            except Exception as attempt_error:
+                last_error_message = str(attempt_error)
+                continue
+
+        if last_error_message:
+            print(
+                f"Warning: {stock_code} 최근 {maximum_lookback_calendar_days}일 내 "
+                f"시가총액/주가 조회 실패: {last_error_message}"
+            )
+        else:
+            print(
+                f"Warning: {stock_code}의 최근 {maximum_lookback_calendar_days}일 내 "
+                f"시가총액/주가 데이터가 없습니다."
+            )
+        return None
+
     except Exception as error:
         print(f"Error: KRX 데이터 수집 실패 ({stock_code}): {error}")
         return None

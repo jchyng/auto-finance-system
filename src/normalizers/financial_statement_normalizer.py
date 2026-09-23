@@ -61,6 +61,7 @@ ACCOUNT_NAME_MAPPING = {
     # 금융업 대용 수익 (매출액 계정 부재 시 사용)
     "이자수익": ["이자수익", "이자 및 배당수익(손실)"],
     "수수료수익": ["수수료수익", "수수료 및 중개수입"],
+    "기본주당이익": ["기본주당이익", "기본주당순이익", "기본주당순손익"],
 }
 
 
@@ -75,6 +76,7 @@ PREFERRED_STATEMENT_SECTION_BY_ACCOUNT = {
     "이자비용": {"CIS", "IS"},
     "이자수익": {"CIS", "IS"},
     "수수료수익": {"CIS", "IS"},
+    "기본주당이익": {"CIS", "IS"},
     "자산총계": {"BS"},
     "부채총계": {"BS"},
     "자본총계": {"BS"},
@@ -161,6 +163,44 @@ def find_account_value_by_name(
                 if amount is not None:
                     return amount
 
+    return None
+
+
+def find_basic_eps_value(
+    accounts_list: List[Dict[str, Any]],
+    fiscal_year: int,
+) -> Optional[float]:
+    """DART 공시의 기본주당이익(원)을 찾아 반환합니다."""
+    possible_names = ACCOUNT_NAME_MAPPING["기본주당이익"]
+    preferred_sections = PREFERRED_STATEMENT_SECTION_BY_ACCOUNT["기본주당이익"]
+
+    def strip_parenthetical_description(account_name: str) -> str:
+        while True:
+            opening_position = account_name.rfind("(")
+            if opening_position == -1:
+                return account_name.strip()
+            account_name = account_name[:opening_position]
+
+    for section_priority in (preferred_sections, None):
+        for account in accounts_list:
+            account_year = account.get("fiscal_year") or account.get("bsns_year")
+            if account_year is not None:
+                try:
+                    if int(account_year) != int(fiscal_year):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            if section_priority is not None and account.get("sj_div") not in section_priority:
+                continue
+            account_name = account.get("account_nm", "").strip()
+            normalized_name = strip_parenthetical_description(account_name)
+            if account_name not in possible_names and normalized_name not in possible_names:
+                continue
+            amount_text = str(account.get("thstrm_amount", "")).replace(",", "").strip()
+            try:
+                return float(amount_text)
+            except (TypeError, ValueError):
+                continue
     return None
 
 
@@ -269,6 +309,13 @@ def normalize_dart_financial_statement(
         dart_raw_accounts, "이자비용", fiscal_year
     )
 
+    basic_eps_krw = find_basic_eps_value(dart_raw_accounts, fiscal_year)
+    adjusted_basic_shares_outstanding = None
+    if basic_eps_krw not in (None, 0) and controlling_interest_net_income_krw is not None:
+        estimated_shares = controlling_interest_net_income_krw / basic_eps_krw
+        if estimated_shares > 0:
+            adjusted_basic_shares_outstanding = round(estimated_shares)
+
     # 필수 항목 검증
     if revenue_krw is None or operating_income_krw is None:
         raise ValueError(
@@ -318,7 +365,8 @@ def normalize_dart_financial_statement(
         intangible_asset_amortization_krw=intangible_asset_amortization_krw,
         interest_expense_krw=interest_expense_krw,
         is_financial_industry=is_financial_industry,
-        data_source_name="DART 전자공시"
+        data_source_name="DART 전자공시",
+        adjusted_basic_shares_outstanding=adjusted_basic_shares_outstanding,
     )
 
 
