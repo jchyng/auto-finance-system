@@ -164,7 +164,7 @@ def save_intermediate_artifacts_to_disk(
 
 def run_investment_analysis_pipeline(
     stock_code: str,
-    fiscal_year: int = 2023,
+    fiscal_year: Optional[int] = None,
     number_of_years: int = 5,
     output_report_file_path: Optional[str] = None,
     report_format: str = "text",
@@ -179,7 +179,7 @@ def run_investment_analysis_pipeline(
 
     Args:
         stock_code: 6자리 종목코드 (예: "005930")
-        fiscal_year: 기준 사업연도 (기본값: 2023)
+        fiscal_year: 기준 사업연도 (None이면 최신 공시 사업연도 자동 탐색)
         number_of_years: 수집 및 분석 연도 수 (기본값: 5)
         output_report_file_path: 최종 리포트 저장 경로 (None일 경우 파일 저장 안 함)
         report_format: 리포트 출력 형식 ("text" 또는 "json")
@@ -196,7 +196,8 @@ def run_investment_analysis_pipeline(
         ValueError: 파이프라인 단계 중 필수 데이터 누락 또는 처리 실패 시
     """
     print("=" * 80)
-    print(f"투자 분석 파이프라인 시작 (종목코드: {stock_code}, 기준연도: {fiscal_year})")
+    requested_year_label = fiscal_year if fiscal_year is not None else "최신 자동 탐색"
+    print(f"투자 분석 파이프라인 시작 (종목코드: {stock_code}, 기준연도: {requested_year_label})")
     print("=" * 80)
 
     # ------------------------------------------------------------------------

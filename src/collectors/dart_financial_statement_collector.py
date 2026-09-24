@@ -246,7 +246,7 @@ def fetch_annual_financial_statements_from_dart_api(
     stock_code: str,
     corporation_code: str,
     api_key: str,
-    fiscal_year: int = 2023,
+    fiscal_year: Optional[int] = None,
     number_of_years: int = 5
 ) -> List[Dict[str, Any]]:
     """
@@ -256,7 +256,7 @@ def fetch_annual_financial_statements_from_dart_api(
         stock_code: 6자리 종목코드
         corporation_code: 8자리 DART 기업코드
         api_key: DART API Key
-        fiscal_year: 최신 사업연도 (기본값: 2023)
+        fiscal_year: 시작 사업연도 (None이면 최신 공시 사업연도를 자동 탐색)
         number_of_years: 수집할 연도 수 (기본값: 5)
     
     Returns:
@@ -265,6 +265,9 @@ def fetch_annual_financial_statements_from_dart_api(
     Raises:
         RuntimeError: API 호출 실패 시
     """
+    if fiscal_year is None:
+        fiscal_year = datetime.now().year - 1
+
     collected_statements = []
     
     for year_offset in range(number_of_years):
@@ -301,6 +304,39 @@ def fetch_annual_financial_statements_from_dart_api(
             print(f"Warning: DART API 처리 중 오류 (연도 {target_year}): {safe_message}")
     
     return collected_statements
+
+
+def find_latest_available_fiscal_year_from_dart_api(
+    corporation_code: str,
+    api_key: str,
+    maximum_years_to_check: int = 5,
+) -> Optional[int]:
+    """DART에서 현재 시점에 조회 가능한 가장 최근 사업연도를 찾습니다."""
+    candidate_start_year = datetime.now().year - 1
+
+    for year_offset in range(maximum_years_to_check):
+        candidate_year = candidate_start_year - year_offset
+        request = build_dart_api_request(
+            DART_FINANCIAL_STATEMENT_URL,
+            {
+                "crtfc_key": api_key,
+                "corp_code": corporation_code,
+                "bsns_year": str(candidate_year),
+                "reprt_code": "11011",
+                "fs_div": "CFS",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response_data = json.loads(response.read().decode("utf-8"))
+            if response_data.get("status") == "000" and response_data.get("list"):
+                return candidate_year
+        except Exception as error:
+            safe_message = redact_dart_api_key_from_text(str(error), api_key)
+            print(f"Warning: 최신 사업연도 조회 실패 (연도 {candidate_year}): {safe_message}")
+
+    return None
 
 
 def load_financial_statements_from_fixture(stock_code: str) -> Optional[List[Dict[str, Any]]]:
@@ -389,7 +425,7 @@ def convert_dart_raw_statements_to_normalized_statements(
 
 def collect_normalized_financial_statements(
     stock_code: str,
-    fiscal_year: int = 2023,
+    fiscal_year: Optional[int] = None,
     number_of_years: int = 5,
     use_fixture_fallback: bool = True
 ) -> List[NormalizedFinancialStatement]:
@@ -398,7 +434,7 @@ def collect_normalized_financial_statements(
     
     Args:
         stock_code: 6자리 종목코드 (예: "005930")
-        fiscal_year: 최신 사업연도 (기본값: 2023)
+        fiscal_year: 최신 사업연도 (None이면 최신 공시 사업연도 자동 탐색)
         number_of_years: 수집할 연도 수 (기본값: 5)
         use_fixture_fallback: API Key 없을 때 fixture 사용 여부
     
@@ -416,11 +452,25 @@ def collect_normalized_financial_statements(
         
         if corporation_code:
             try:
+                resolved_fiscal_year = fiscal_year
+                if resolved_fiscal_year is None:
+                    resolved_fiscal_year = find_latest_available_fiscal_year_from_dart_api(
+                        corporation_code=corporation_code,
+                        api_key=api_key,
+                    )
+                    if resolved_fiscal_year is None:
+                        print("Warning: 최신 사업연도를 찾지 못해 DART 수집을 중단합니다.")
+                    else:
+                        print(f"Info: DART 최신 사업연도 자동 선택: {resolved_fiscal_year}년")
+
+                if resolved_fiscal_year is None:
+                    raise RuntimeError("DART에서 조회 가능한 사업연도가 없습니다.")
+
                 raw_statements = fetch_annual_financial_statements_from_dart_api(
                     stock_code=stock_code,
                     corporation_code=corporation_code,
                     api_key=api_key,
-                    fiscal_year=fiscal_year,
+                    fiscal_year=resolved_fiscal_year,
                     number_of_years=number_of_years
                 )
                 
@@ -454,6 +504,17 @@ def collect_normalized_financial_statements(
         fixture_statements = load_financial_statements_from_fixture(stock_code)
         
         if fixture_statements:
+            requested_fiscal_year = fiscal_year
+            if requested_fiscal_year is None:
+                requested_fiscal_year = max(
+                    statement["fiscal_year"] for statement in fixture_statements
+                )
+                expected_latest_fiscal_year = datetime.now().year - 1
+                if requested_fiscal_year < expected_latest_fiscal_year:
+                    print(
+                        f"Warning: Fixture 최신 사업연도는 {requested_fiscal_year}년으로, "
+                        f"현재 예상 최신 연도({expected_latest_fiscal_year}년)보다 오래되었습니다."
+                    )
             normalized_statements = [
                 NormalizedFinancialStatement.from_dictionary(stmt)
                 for stmt in fixture_statements
@@ -461,7 +522,7 @@ def collect_normalized_financial_statements(
             # 요청 연도·개수에 맞게 필터 (가능하면 무시하지 않음)
             filtered_statements = [
                 stmt for stmt in normalized_statements
-                if stmt.fiscal_year <= fiscal_year
+                if stmt.fiscal_year <= requested_fiscal_year
             ]
             filtered_statements.sort(key=lambda item: item.fiscal_year, reverse=True)
             filtered_statements = filtered_statements[:number_of_years]
@@ -472,15 +533,15 @@ def collect_normalized_financial_statements(
                     reverse=True,
                 )[:number_of_years]
                 print(
-                    f"Warning: 요청 연도({fiscal_year})에 맞는 fixture가 없어 "
+                    f"Warning: 요청 연도({requested_fiscal_year})에 맞는 fixture가 없어 "
                     f"가용 최신 {len(filtered_statements)}개년을 사용합니다."
                 )
             print(f"Success: Fixture에서 {len(filtered_statements)}개 연도 재무제표 로드 완료")
             return filtered_statements
     
     raise ValueError(
-        f"재무제표 수집 실패: DART_API_KEY 환경변수가 설정되지 않았고, "
-        f"종목코드 {stock_code}에 대한 fixture도 존재하지 않습니다."
+        f"재무제표 수집 실패: DART API와 fixture에서 "
+        f"종목코드 {stock_code}의 데이터를 확보하지 못했습니다."
     )
 
 
@@ -528,8 +589,8 @@ def main():
     parser.add_argument(
         "--fiscal-year",
         type=int,
-        default=2023,
-        help="최신 사업연도 (기본값: 2023)"
+        default=None,
+        help="최신 사업연도 (미지정 시 DART에서 자동 탐색, fixture는 가용 최신 연도 사용)"
     )
     parser.add_argument(
         "--years",

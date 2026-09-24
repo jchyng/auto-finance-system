@@ -47,8 +47,8 @@ def build_command_line_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fiscal-year",
         type=int,
-        default=2023,
-        help="분석 기준 최신 사업연도 (기본값: 2023)",
+        default=None,
+        help="분석 기준 최신 사업연도 (미지정 시 최신 공시 사업연도 자동 탐색)",
     )
     parser.add_argument(
         "--years",
